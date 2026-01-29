@@ -51,11 +51,6 @@ impl ServerResources {
     pub fn quit_flag(&self) -> Arc<AtomicBool> {
         self.quit_flag.clone()
     }
-
-    /// Get the base directory path
-    pub fn base_dir(&self) -> &PathBuf {
-        &self.base_dir
-    }
 }
 
 impl Drop for ServerResources {
