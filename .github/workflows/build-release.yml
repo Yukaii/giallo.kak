@@ -61,7 +61,11 @@ jobs:
       - name: Generate giallo builtin dump
         working-directory: giallo
         run: |
+          # Create empty file to satisfy include_bytes! during compilation
+          touch builtin.msgpack
+          # Generate grammar metadata
           node scripts/extract-grammar-metadata.js
+          # Build and run the registry builder to generate real builtin.msgpack
           cargo run --release --bin=build-registry --features=tools
 
       - name: Copy builtin dump to giallo.kak
