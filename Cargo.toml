@@ -1,0 +1,8 @@
+[package]
+name = "giallo-kak"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Local development dependency; adjust to a crates.io version when published.
+giallo = { path = "../giallo", features = ["dump"] }
