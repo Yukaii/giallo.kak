@@ -311,41 +311,44 @@ fn run_server<R: BufRead, W: Write>(
             let req_path = req.clone();
             let resp_path = resp.clone();
             let token_clone = token.clone();
-            thread::spawn(move || {
-                let mut registry = match Registry::builtin() {
-                    Ok(registry) => registry,
-                    Err(err) => {
-                        eprintln!("init thread registry error ({token_clone}): {err}");
-                        return;
-                    }
-                };
-                registry.link_grammars();
+    thread::spawn(move || {
+        let mut registry = match Registry::builtin() {
+            Ok(registry) => registry,
+            Err(err) => {
+                eprintln!("init thread registry error ({token_clone}): {err}");
+                return;
+            }
+        };
+        registry.link_grammars();
 
-                let req_file = match OpenOptions::new().read(true).open(&req_path) {
-                    Ok(file) => file,
-                    Err(err) => {
-                        eprintln!("init thread open req error ({token_clone}): {err}");
-                        return;
-                    }
-                };
-                let resp_file = match OpenOptions::new().write(true).open(&resp_path) {
-                    Ok(file) => file,
-                    Err(err) => {
-                        eprintln!("init thread open resp error ({token_clone}): {err}");
-                        return;
-                    }
-                };
+        let req_file = match OpenOptions::new().read(true).open(&req_path) {
+            Ok(file) => file,
+            Err(err) => {
+                eprintln!("init thread open req error ({token_clone}): {err}");
+                return;
+            }
+        };
+        let resp_file = match OpenOptions::new().write(true).open(&resp_path) {
+            Ok(file) => file,
+            Err(err) => {
+                eprintln!("init thread open resp error ({token_clone}): {err}");
+                return;
+            }
+        };
 
-                let mut req_reader = io::BufReader::new(req_file);
-                let mut resp_writer = resp_file;
-                let _ = run_server(
-                    &mut req_reader,
-                    &mut resp_writer,
-                    &mut registry,
-                    false,
-                    None,
-                );
-            });
+        let mut req_reader = io::BufReader::new(req_file);
+        let mut resp_writer = resp_file;
+        let _ = run_server(
+            &mut req_reader,
+            &mut resp_writer,
+            &mut registry,
+            false,
+            None,
+        );
+
+        let _ = fs::remove_file(&req_path);
+        let _ = fs::remove_file(&resp_path);
+    });
 
             if oneshot {
                 writer.write_all(commands.as_bytes())?;

@@ -164,3 +164,4 @@ hook -group giallo global BufOpen .* %{ giallo-rehighlight }
 hook -group giallo global BufReload .* %{ giallo-rehighlight }
 hook -group giallo global BufWritePost .* %{ giallo-rehighlight }
 hook -group giallo global InsertChar .* %{ giallo-rehighlight }
+hook -group giallo global BufClose .* %{ giallo-disable }
