@@ -28,9 +28,6 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             binary: giallo-kak
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            binary: giallo-kak.exe
 
     steps:
       - name: Checkout giallo.kak
@@ -87,15 +84,9 @@ jobs:
         run: |
           cd giallo-kak
           mkdir -p dist
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
-            cd dist
-            7z a ../giallo-kak-${{ matrix.target }}.zip ${{ matrix.binary }}
-          else
-            cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
-            cd dist
-            tar czf ../giallo-kak-${{ matrix.target }}.tar.gz ${{ matrix.binary }}
-          fi
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
+          cd dist
+          tar czf ../giallo-kak-${{ matrix.target }}.tar.gz ${{ matrix.binary }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
