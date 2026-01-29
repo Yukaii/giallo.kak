@@ -12,6 +12,7 @@ declare-option -hidden int giallo_buf_update_timestamp -1
 declare-option -hidden str giallo_server_req
 declare-option -hidden str giallo_server_pid
 declare-option -hidden str giallo_server_log
+declare-option -hidden bool giallo_remove_default_highlighter true
 
 # Debug option: set to true to enable verbose server logging
 declare-option -hidden bool giallo_debug false
@@ -70,6 +71,21 @@ define-command -docstring "Stop giallo server" giallo-stop-server %{
     }
 }
 
+define-command -hidden giallo-remove-default-highlighter %{
+    evaluate-commands %sh{
+        if [ "$kak_opt_giallo_remove_default_highlighter" != "true" ]; then
+            exit 0
+        fi
+        if [ "$kak_opt_giallo_enabled" != "true" ]; then
+            exit 0
+        fi
+        if [ -z "$kak_opt_filetype" ]; then
+            exit 0
+        fi
+        printf 'try %%{ remove-highlighter window/%s }\n' "$kak_opt_filetype"
+    }
+}
+
 # Enable giallo highlighting for current buffer
 # TODO: wire IPC and automatic updates.
 define-command -docstring "Enable giallo highlighting for the current buffer" giallo-enable %{ 
@@ -88,8 +104,9 @@ define-command -docstring "Enable giallo highlighting for the current buffer" gi
         fi
     }
     
+    giallo-remove-default-highlighter
     try %{ remove-highlighter buffer/giallo }
-    add-highlighter buffer/giallo ranges giallo_hl_ranges
+    add-highlighter -override buffer/giallo ranges giallo_hl_ranges
     giallo-start-server
     giallo-init-buffer
 }
@@ -262,7 +279,7 @@ define-command -docstring "Rehighlight current buffer using giallo" giallo-rehig
         fi
         if [ "$kak_opt_giallo_enabled" = "true" ]; then
             printf 'try %%{ remove-highlighter buffer/giallo }\n'
-            printf 'add-highlighter buffer/giallo ranges giallo_hl_ranges\n'
+            printf 'add-highlighter -override buffer/giallo ranges giallo_hl_ranges\n'
         fi
         if [ "$kak_opt_giallo_debug" = "true" ] && [ "$kak_opt_giallo_enabled" = "true" ]; then
             echo "giallo-rehighlight: enabled=$kak_opt_giallo_enabled fifo=$kak_opt_giallo_buf_fifo_path lang=$kak_opt_giallo_lang" >&2
@@ -296,6 +313,7 @@ hook -group giallo global BufSetOption filetype=.* %{
             fi
         fi
     }
+    giallo-remove-default-highlighter
 }
 
 # Auto-enable giallo on open buffers that have a filetype
@@ -315,6 +333,8 @@ hook -group giallo global BufSetOption filetype=.* %{
         fi
     }
 }
+
+hook -group giallo global WinDisplay .* %{ giallo-remove-default-highlighter }
 
 # Auto refresh on idle edits; uses giallo_enabled guard inside giallo-rehighlight.
 hook -group giallo global NormalIdle .* %{ giallo-rehighlight }
