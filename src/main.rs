@@ -4,11 +4,16 @@ use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 
 use giallo::{HighlightOptions, Registry, ThemeVariant, PLAIN_GRAMMAR_NAME};
 use log;
 use serde::Deserialize;
+
+mod server_resources;
+use server_resources::ServerResources;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct StyleKey {
@@ -336,6 +341,7 @@ fn run_buffer_fifo<R: BufRead>(
     registry: &mut Registry,
     config: &Config,
     ctx: BufferContext,
+    quit_flag: Option<&Arc<AtomicBool>>,
 ) -> io::Result<()> {
     let mut buf = String::new();
     let mut line = String::new();
@@ -349,6 +355,17 @@ fn run_buffer_fifo<R: BufRead>(
     );
 
     loop {
+        // Check quit signal if provided
+        if let Some(flag) = quit_flag {
+            if flag.load(Ordering::Relaxed) {
+                log::info!(
+                    "buffer FIFO: quit signal received, exiting for buffer={}",
+                    ctx.buffer
+                );
+                break;
+            }
+        }
+
         line.clear();
         let bytes = reader.read_line(&mut line)?;
         if bytes == 0 {
@@ -598,9 +615,16 @@ fn run_server<R: BufRead, W: Write>(
     oneshot: bool,
     base_dir: Option<&Path>,
     ctx: Option<BufferContext>,
+    resources: &ServerResources,
 ) -> io::Result<()> {
     let mut line = String::new();
     loop {
+        // Check quit signal
+        if resources.should_quit() {
+            log::info!("Quit signal received, exiting server loop");
+            break;
+        }
+
         line.clear();
         let bytes = reader.read_line(&mut line)?;
         if bytes == 0 {
@@ -703,6 +727,7 @@ fn run_server<R: BufRead, W: Write>(
                 }
             };
             log::debug!("INIT: spawning buffer handler thread");
+            let thread_quit_flag = resources.quit_flag();
             thread::spawn(move || {
                 log::debug!("buffer thread: starting for {}", token_clone);
                 let mut registry = match Registry::builtin() {
@@ -721,7 +746,13 @@ fn run_server<R: BufRead, W: Write>(
                 log::debug!("buffer thread: registry ready for {}", token_clone);
 
                 let mut req_reader = io::BufReader::new(req_file);
-                let _ = run_buffer_fifo(&mut req_reader, &mut registry, &config_clone, ctx);
+                let _ = run_buffer_fifo(
+                    &mut req_reader,
+                    &mut registry,
+                    &config_clone,
+                    ctx,
+                    Some(&thread_quit_flag),
+                );
 
                 let _ = fs::remove_file(&req_path);
                 log::debug!("buffer thread: exiting for {}", token_clone);
@@ -839,6 +870,16 @@ fn main() {
     log::info!("starting giallo-kak server");
     log::debug!("base_dir: {}", base_dir.display());
 
+    // Create server resources for cleanup management
+    let resources = ServerResources::new(base_dir.clone());
+
+    // Setup signal handler for graceful shutdown
+    if let Err(e) = resources.setup_signal_handler() {
+        log::warn!("failed to setup signal handler: {}", e);
+    } else {
+        log::debug!("signal handler installed successfully");
+    }
+
     let mut registry = match Registry::builtin() {
         Ok(registry) => registry,
         Err(err) => {
@@ -878,6 +919,7 @@ fn main() {
                 false,
                 Some(&base_dir),
                 None,
+                &resources,
             ) {
                 log::error!("server error: {err}");
                 eprintln!("server error: {err}");
@@ -897,6 +939,7 @@ fn main() {
                 true,
                 Some(&base_dir),
                 None,
+                &resources,
             ) {
                 log::error!("oneshot error: {err}");
                 eprintln!("oneshot error: {err}");
@@ -941,6 +984,7 @@ fn main() {
                 false,
                 Some(&base_dir),
                 None,
+                &resources,
             ) {
                 log::error!("fifo server error: {err}");
                 eprintln!("fifo server error: {err}");

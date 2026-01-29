@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+ctrlc = "3.4"
 giallo = { version = "0.2.2", features = ["dump"] }
 libc = "0.2"
 log = "0.4"
