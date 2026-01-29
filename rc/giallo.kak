@@ -161,15 +161,15 @@ define-command -hidden giallo-buffer-update %{
         fi
         
         if [ $result -ne 0 ]; then
-            printf 'echo "giallo: ERROR - failed to write to fifo (exit %d)"\n' "$result"
+            if [ "$kak_opt_giallo_debug" = "true" ]; then
+                printf 'echo "giallo: ERROR - failed to write to fifo (exit %d)"\n' "$result"
+            fi
             exit 1
         fi
         
         if [ "$kak_opt_giallo_debug" = "true" ]; then
             echo "giallo-buffer-update: SUCCESS" >&2
         fi
-        
-        printf 'echo "giallo: buffer sent successfully"\n'
     }
 }
 
@@ -234,11 +234,23 @@ define-command -params 1 -docstring "Set giallo theme for current buffer" giallo
     giallo-rehighlight
 }
 
+# Global option to auto-enable giallo on buffers with filetype
+declare-option -hidden bool giallo_auto_enable true
+
 # Auto set giallo_lang from filetype unless explicitly set.
 hook -group giallo global BufSetOption filetype=.* %{
     evaluate-commands %sh{
         if [ -z "$kak_opt_giallo_lang" ] && [ -n "$kak_opt_filetype" ]; then
             printf 'set-option buffer giallo_lang %s\n' "$kak_opt_filetype"
+        fi
+    }
+}
+
+# Auto-enable giallo on open buffers that have a filetype
+hook -group giallo global BufCreate .* %{
+    evaluate-commands %sh{
+        if [ "$kak_opt_giallo_auto_enable" = "true" ] && [ -n "$kak_opt_filetype" ]; then
+            printf 'giallo-enable\n'
         fi
     }
 }
