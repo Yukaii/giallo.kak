@@ -124,3 +124,4 @@ Special thanks to:
 
 - **jdugan6240** from the Kakoune community Discord for sharing [giallo](https://github.com/getzola/giallo) and inspiring this Kakoune integration project
 - [**kak-tree-sitter**](https://git.sr.ht/~hadronized/kak-tree-sitter) for the inspiration on the IPC architecture and FIFO-based communication pattern
+- **OpenAI Codex 5.2** and **Kimi K2.5** for assistance in developing this project
