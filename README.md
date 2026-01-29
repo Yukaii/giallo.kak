@@ -2,6 +2,10 @@
 
 Kakoune integration for the [`giallo`](https://github.com/getzola/giallo) TextMate highlighter.
 
+## Demo
+
+[![asciicast](https://asciinema.org/a/776004.svg)](https://asciinema.org/a/776004)
+
 ## Installation
 
 ### From GitHub Releases (Recommended)
