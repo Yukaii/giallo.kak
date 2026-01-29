@@ -162,6 +162,7 @@ dependencies = [
  "libc",
  "log",
  "serde",
+ "serde_json",
  "simple_logger",
  "toml",
  "which",

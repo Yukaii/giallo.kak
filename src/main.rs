@@ -294,6 +294,12 @@ fn highlight_and_send(
         }
         Err(err) => {
             log::warn!(
+                "highlight: failed for lang={} theme={}: {}",
+                resolved_lang,
+                resolved_theme,
+                err
+            );
+            log::warn!(
                 "highlight: failed with lang={}, trying plain: {}",
                 resolved_lang,
                 err
@@ -542,6 +548,54 @@ fn is_grammar_file(path: &Path) -> bool {
         })
 }
 
+#[derive(Deserialize)]
+struct GrammarMeta {
+    name: String,
+    #[serde(default, rename = "fileTypes")]
+    file_types: Vec<String>,
+}
+
+fn load_grammar_meta(path: &Path) -> Option<GrammarMeta> {
+    if path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .map_or(true, |ext| ext != "json")
+    {
+        return None;
+    }
+
+    let contents = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+fn file_stem_alias(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_string_lossy();
+    let alias = stem.split('.').next()?.trim();
+    if alias.is_empty() {
+        None
+    } else {
+        Some(alias.to_lowercase())
+    }
+}
+
+fn add_grammar_aliases(registry: &mut Registry, meta: &GrammarMeta, path: &Path) {
+    let grammar_name = meta.name.trim();
+    if grammar_name.is_empty() {
+        return;
+    }
+
+    for file_type in &meta.file_types {
+        let alias = file_type.trim();
+        if !alias.is_empty() {
+            registry.add_alias(grammar_name, alias);
+        }
+    }
+
+    if let Some(alias) = file_stem_alias(path) {
+        registry.add_alias(grammar_name, &alias);
+    }
+}
+
 fn load_custom_grammars_in_dir(
     registry: &mut Registry,
     dir: &Path,
@@ -567,6 +621,9 @@ fn load_custom_grammars_in_dir(
             Ok(_) => {
                 log::info!("loaded grammar: {}", path.display());
                 *loaded_count += 1;
+                if let Some(meta) = load_grammar_meta(&path) {
+                    add_grammar_aliases(registry, &meta, &path);
+                }
             }
             Err(err) => {
                 log::error!("failed to load grammar {}: {}", path.display(), err);
@@ -831,7 +888,13 @@ fn run_server<R: BufRead, W: Write>(
         let options = HighlightOptions::new(&resolved_lang, ThemeVariant::Single(resolved_theme));
         let highlighted = match registry.highlight(&text, &options) {
             Ok(h) => h,
-            Err(_) => {
+            Err(err) => {
+                log::warn!(
+                    "highlight: failed for lang={} theme={}: {}",
+                    resolved_lang,
+                    resolved_theme,
+                    err
+                );
                 let fallback =
                     HighlightOptions::new(PLAIN_GRAMMAR_NAME, ThemeVariant::Single(resolved_theme));
                 match registry.highlight(&text, &fallback) {
