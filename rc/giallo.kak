@@ -13,6 +13,7 @@ declare-option -hidden str giallo_server_req
 declare-option -hidden str giallo_server_pid
 declare-option -hidden str giallo_server_log
 declare-option -hidden bool giallo_remove_default_highlighter true
+declare-option -hidden str-list giallo_extension_map
 
 # Debug option: set to true to enable verbose server logging
 declare-option -hidden bool giallo_debug false
@@ -343,6 +344,29 @@ declare-option -hidden bool giallo_auto_enable true
 # Auto set giallo_lang from filetype unless explicitly set.
 hook -group giallo global BufSetOption filetype=.* %{
     evaluate-commands %sh{
+        mapped=0
+        if [ -n "$kak_buffile" ]; then
+            ext="${kak_buffile##*.}"
+            if [ "$ext" != "$kak_buffile" ] && [ -n "$ext" ]; then
+                for entry in $kak_opt_giallo_extension_map; do
+                    key="${entry%%=*}"
+                    val="${entry#*=}"
+                    if [ -n "$key" ] && [ -n "$val" ] && [ "$key" = "$ext" ]; then
+                        if [ -z "$kak_opt_giallo_lang" ] || [ "$kak_opt_giallo_lang" = "$kak_opt_filetype" ]; then
+                            printf 'set-option buffer giallo_lang %s\n' "$val"
+                            mapped=1
+                            if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$kak_opt_giallo_server_log" ]; then
+                                printf 'giallo: set giallo_lang=%s from extension %s\n' "$val" "$ext" >>"$kak_opt_giallo_server_log"
+                            fi
+                        fi
+                        break
+                    fi
+                done
+            fi
+        fi
+        if [ "$mapped" = "1" ]; then
+            exit 0
+        fi
         if [ -z "$kak_opt_giallo_lang" ] && [ -n "$kak_opt_filetype" ]; then
             printf 'set-option buffer giallo_lang %s\n' "$kak_opt_filetype"
             if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$kak_opt_giallo_server_log" ]; then
