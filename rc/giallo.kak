@@ -255,6 +255,15 @@ hook -group giallo global BufCreate .* %{
     }
 }
 
+# Auto-enable giallo when filetype is set (for files that detect language after creation)
+hook -group giallo global BufSetOption filetype=.* %{
+    evaluate-commands %sh{
+        if [ "$kak_opt_giallo_auto_enable" = "true" ] && [ -n "$kak_opt_filetype" ] && [ "$kak_opt_giallo_enabled" != "true" ]; then
+            printf 'giallo-enable\n'
+        fi
+    }
+}
+
 # Auto refresh on idle edits; uses giallo_enabled guard inside giallo-rehighlight.
 hook -group giallo global NormalIdle .* %{ giallo-rehighlight }
 

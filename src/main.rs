@@ -506,11 +506,22 @@ impl Config {
 
 const DEFAULT_THEME: &str = "catppuccin-frappe";
 
+/// Expand ~ to home directory in path
+fn expand_path(path: &str) -> PathBuf {
+    if path.starts_with("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(&path[2..]);
+        }
+    }
+    PathBuf::from(path)
+}
+
 /// Load custom grammars from the given directory path
 fn load_custom_grammars(registry: &mut Registry, grammars_path: &str) -> io::Result<()> {
-    let path = Path::new(grammars_path);
+    let path = expand_path(grammars_path);
+    let path_str = path.display().to_string();
     if !path.exists() {
-        log::debug!("grammars path does not exist: {}", grammars_path);
+        log::debug!("grammars path does not exist: {}", path_str);
         return Ok(());
     }
 
