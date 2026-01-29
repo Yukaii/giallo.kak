@@ -404,6 +404,30 @@ fn run_buffer_fifo<R: BufRead>(
             continue;
         }
 
+        if let Some(content) = trimmed.strip_suffix(&ctx.sentinel) {
+            if !content.is_empty() {
+                buf.push_str(content);
+            }
+            log::debug!(
+                "buffer FIFO: got inline sentinel, processing buffer (lang={} theme={} len={})",
+                current_lang,
+                current_theme,
+                buf.len()
+            );
+            if !current_lang.is_empty() {
+                highlight_and_send(&buf, &current_lang, &current_theme, registry, config, &ctx);
+            } else {
+                log::warn!(
+                    "buffer FIFO: empty language, skipping highlight for buffer={}",
+                    ctx.buffer
+                );
+            }
+            buf.clear();
+            current_lang.clear();
+            current_theme.clear();
+            continue;
+        }
+
         if trimmed.starts_with("H ") {
             let mut parts = trimmed.splitn(3, ' ');
             let _ = parts.next();
