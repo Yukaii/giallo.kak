@@ -534,6 +534,49 @@ fn expand_path(path: &str) -> PathBuf {
 }
 
 /// Load custom grammars from the given directory path
+fn is_grammar_file(path: &Path) -> bool {
+    path.extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .map_or(false, |ext| {
+            matches!(ext.as_str(), "json" | "plist" | "tmlanguage")
+        })
+}
+
+fn load_custom_grammars_in_dir(
+    registry: &mut Registry,
+    dir: &Path,
+    loaded_count: &mut usize,
+) -> io::Result<()> {
+    let entries = fs::read_dir(dir)?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            load_custom_grammars_in_dir(registry, &path, loaded_count)?;
+            continue;
+        }
+
+        if !is_grammar_file(&path) {
+            continue;
+        }
+
+        log::debug!("loading grammar from: {}", path.display());
+        match registry.add_grammar_from_path(&path) {
+            Ok(_) => {
+                log::info!("loaded grammar: {}", path.display());
+                *loaded_count += 1;
+            }
+            Err(err) => {
+                log::error!("failed to load grammar {}: {}", path.display(), err);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn load_custom_grammars(registry: &mut Registry, grammars_path: &str) -> io::Result<()> {
     let path = expand_path(grammars_path);
     let path_str = path.display().to_string();
@@ -542,29 +585,8 @@ fn load_custom_grammars(registry: &mut Registry, grammars_path: &str) -> io::Res
         return Ok(());
     }
 
-    let entries = fs::read_dir(path)?;
     let mut loaded_count = 0;
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path
-            .extension()
-            .map_or(false, |ext| ext == "json" || ext == "plist")
-        {
-            log::debug!("loading grammar from: {}", path.display());
-            match registry.add_grammar_from_path(&path) {
-                Ok(_) => {
-                    log::info!("loaded grammar: {}", path.display());
-                    loaded_count += 1;
-                }
-                Err(err) => {
-                    log::error!("failed to load grammar {}: {}", path.display(), err);
-                }
-            }
-        }
-    }
+    load_custom_grammars_in_dir(registry, &path, &mut loaded_count)?;
 
     log::info!(
         "loaded {} custom grammars from {}",

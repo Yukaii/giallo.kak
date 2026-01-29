@@ -4,6 +4,7 @@
 //! of temporary directories and resources via RAII Drop trait.
 
 use std::path::PathBuf;
+use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -34,9 +35,12 @@ impl ServerResources {
     /// Installs a SIGINT/SIGTERM handler that sets the quit flag
     pub fn setup_signal_handler(&self) -> Result<(), Box<dyn std::error::Error>> {
         let quit = self.quit_flag.clone();
+        let base_dir = self.base_dir.clone();
         ctrlc::set_handler(move || {
             log::info!("SIGINT/SIGTERM received, initiating graceful shutdown");
             quit.store(true, Ordering::Relaxed);
+            cleanup_base_dir(&base_dir);
+            process::exit(0);
         })?;
         log::debug!("Signal handler installed successfully");
         Ok(())
@@ -53,22 +57,22 @@ impl ServerResources {
     }
 }
 
+fn cleanup_base_dir(base_dir: &PathBuf) {
+    if base_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(base_dir) {
+            log::warn!("Failed to remove base_dir {}: {}", base_dir.display(), e);
+        } else {
+            log::debug!("Removed base_dir: {}", base_dir.display());
+        }
+    }
+}
+
 impl Drop for ServerResources {
     fn drop(&mut self) {
         log::info!("Cleaning up server resources");
 
         // Remove temp directory and all contents (FIFOs, etc.)
-        if self.base_dir.exists() {
-            if let Err(e) = std::fs::remove_dir_all(&self.base_dir) {
-                log::warn!(
-                    "Failed to remove base_dir {}: {}",
-                    self.base_dir.display(),
-                    e
-                );
-            } else {
-                log::debug!("Removed base_dir: {}", self.base_dir.display());
-            }
-        }
+        cleanup_base_dir(&self.base_dir);
 
         log::info!("Server cleanup complete");
     }
