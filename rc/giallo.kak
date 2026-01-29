@@ -36,6 +36,7 @@ define-command -docstring "Start giallo server with FIFO IPC" giallo-start-serve
             printf 'echo "giallo: debug logging to %s"\n' "$log_file"
         fi
 
+        giallo_bin=$(command -v giallo-kak || true)
         eval "giallo-kak --fifo \"$req\" $verbose_flag $redirect &"
         pid=$!
 
@@ -43,6 +44,9 @@ define-command -docstring "Start giallo server with FIFO IPC" giallo-start-serve
         printf 'set-option global giallo_server_pid %s\n' "$pid"
         if [ "$kak_opt_giallo_debug" = "true" ]; then
             printf 'set-option global giallo_server_log %s\n' "$log_file"
+            if [ -n "$log_file" ]; then
+                printf 'echo "giallo: server pid=%s fifo=%s bin=%s" >>%s\n' "$pid" "$req" "$giallo_bin" "$log_file"
+            fi
         fi
     }
 }
@@ -69,6 +73,12 @@ define-command -docstring "Stop giallo server" giallo-stop-server %{
 # Enable giallo highlighting for current buffer
 # TODO: wire IPC and automatic updates.
 define-command -docstring "Enable giallo highlighting for the current buffer" giallo-enable %{ 
+    evaluate-commands %sh{
+        if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$kak_opt_giallo_server_log" ] && [ "$kak_buffile" = "$kak_opt_giallo_server_log" ]; then
+            printf 'echo "giallo: skip enabling for server log buffer"\n'
+            exit 0
+        fi
+    }
     set-option buffer giallo_enabled true
     
     # Auto-set language from filetype if not already set
@@ -78,7 +88,8 @@ define-command -docstring "Enable giallo highlighting for the current buffer" gi
         fi
     }
     
-    add-highlighter -override buffer/giallo ranges giallo_hl_ranges
+    try %{ remove-highlighter buffer/giallo }
+    add-highlighter buffer/giallo ranges giallo_hl_ranges
     giallo-start-server
     giallo-init-buffer
 }
@@ -104,15 +115,23 @@ define-command -docstring "Initialize per-buffer FIFO for giallo" giallo-init-bu
 
         session="$kak_session"
         buffer="$kak_bufname"
+        log_file="$kak_opt_giallo_server_log"
 
         # Write to FIFO in background to avoid blocking UI if server isn't ready yet.
         sh -c "printf 'INIT %s %s %s\n' '$session' '$buffer' '$buffer' > '$fifo'" >/dev/null 2>&1 &
+        if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$log_file" ]; then
+            printf 'giallo-init-buffer: session=%s buffer=%s fifo=%s\n' "$session" "$buffer" "$fifo" >>"$log_file"
+        fi
     }
 }
 
 # Send buffer content to the server.
 define-command -hidden giallo-buffer-update %{
     evaluate-commands %sh{
+        if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$kak_opt_giallo_server_log" ] && [ "$kak_buffile" = "$kak_opt_giallo_server_log" ]; then
+            echo "giallo-buffer-update: skip server log buffer" >&2
+            exit 0
+        fi
         if [ -z "$kak_opt_giallo_buf_fifo_path" ]; then
             if [ "$kak_opt_giallo_debug" = "true" ]; then
                 echo "giallo-buffer-update: ERROR - no fifo path" >&2
@@ -124,6 +143,7 @@ define-command -hidden giallo-buffer-update %{
         sentinel="$kak_opt_giallo_buf_sentinel"
         lang="$kak_opt_giallo_lang"
         theme="$kak_opt_giallo_theme"
+        log_file="$kak_opt_giallo_server_log"
         
         # Debug output - always log to stderr for shell debugging
         if [ "$kak_opt_giallo_debug" = "true" ]; then
@@ -132,6 +152,10 @@ define-command -hidden giallo-buffer-update %{
             echo "giallo-buffer-update: lang=$lang theme=$theme" >&2
             echo "giallo-buffer-update: sentinel=$sentinel" >&2
             echo "giallo-buffer-update: buffile=$kak_buffile" >&2
+            if [ -n "$log_file" ]; then
+                printf 'giallo-buffer-update: buffer=%s filetype=%s lang=%s theme=%s fifo=%s sentinel=%s buffile=%s\n' \
+                    "$kak_bufname" "$kak_opt_filetype" "$lang" "$theme" "$fifo" "$sentinel" "$kak_buffile" >>"$log_file"
+            fi
         fi
         
         # Check if FIFO exists
@@ -139,6 +163,9 @@ define-command -hidden giallo-buffer-update %{
             if [ "$kak_opt_giallo_debug" = "true" ]; then
                 echo "giallo-buffer-update: ERROR - not a fifo: $fifo" >&2
                 ls -la "$fifo" 2>&1 >&2
+                if [ -n "$log_file" ]; then
+                    printf 'giallo-buffer-update: ERROR - not a fifo: %s\n' "$fifo" >>"$log_file"
+                fi
             fi
             printf 'echo "giallo: ERROR - buffer fifo not found"\n'
             exit 1
@@ -147,6 +174,9 @@ define-command -hidden giallo-buffer-update %{
         # Send header with language and theme
         if [ "$kak_opt_giallo_debug" = "true" ]; then
             echo "giallo-buffer-update: writing header..." >&2
+            if [ -n "$log_file" ]; then
+                printf 'giallo-buffer-update: writing header lang=%s theme=%s\n' "$lang" "$theme" >>"$log_file"
+            fi
         fi
         
         {
@@ -158,17 +188,26 @@ define-command -hidden giallo-buffer-update %{
         result=$?
         if [ "$kak_opt_giallo_debug" = "true" ]; then
             echo "giallo-buffer-update: write result=$result" >&2
+            if [ -n "$log_file" ]; then
+                printf 'giallo-buffer-update: write result=%s\n' "$result" >>"$log_file"
+            fi
         fi
         
         if [ $result -ne 0 ]; then
             if [ "$kak_opt_giallo_debug" = "true" ]; then
                 printf 'echo "giallo: ERROR - failed to write to fifo (exit %d)"\n' "$result"
+                if [ -n "$log_file" ]; then
+                    printf 'giallo-buffer-update: ERROR - write failed exit=%s\n' "$result" >>"$log_file"
+                fi
             fi
             exit 1
         fi
         
         if [ "$kak_opt_giallo_debug" = "true" ]; then
             echo "giallo-buffer-update: SUCCESS" >&2
+            if [ -n "$log_file" ]; then
+                printf 'giallo-buffer-update: SUCCESS\n' >>"$log_file"
+            fi
         fi
     }
 }
@@ -215,7 +254,17 @@ define-command -docstring "Force send buffer to server (debug)" giallo-force-upd
 define-command -docstring "Rehighlight current buffer using giallo" giallo-rehighlight %{ 
     # In debug mode, always update regardless of timestamp
     evaluate-commands %sh{
-        if [ "$kak_opt_giallo_debug" = "true" ]; then
+        if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$kak_opt_giallo_server_log" ] && [ "$kak_buffile" = "$kak_opt_giallo_server_log" ]; then
+            exit 0
+        fi
+        if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$kak_opt_giallo_server_log" ] && [ "$kak_bufname" = "$kak_opt_giallo_server_log" ]; then
+            exit 0
+        fi
+        if [ "$kak_opt_giallo_enabled" = "true" ]; then
+            printf 'try %%{ remove-highlighter buffer/giallo }\n'
+            printf 'add-highlighter buffer/giallo ranges giallo_hl_ranges\n'
+        fi
+        if [ "$kak_opt_giallo_debug" = "true" ] && [ "$kak_opt_giallo_enabled" = "true" ]; then
             echo "giallo-rehighlight: enabled=$kak_opt_giallo_enabled fifo=$kak_opt_giallo_buf_fifo_path lang=$kak_opt_giallo_lang" >&2
             if [ "$kak_opt_giallo_enabled" = "true" ] && [ -n "$kak_opt_giallo_buf_fifo_path" ]; then
                 printf 'giallo-buffer-update\n'
@@ -242,6 +291,9 @@ hook -group giallo global BufSetOption filetype=.* %{
     evaluate-commands %sh{
         if [ -z "$kak_opt_giallo_lang" ] && [ -n "$kak_opt_filetype" ]; then
             printf 'set-option buffer giallo_lang %s\n' "$kak_opt_filetype"
+            if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$kak_opt_giallo_server_log" ]; then
+                printf 'giallo: set giallo_lang=%s from filetype\n' "$kak_opt_filetype" >>"$kak_opt_giallo_server_log"
+            fi
         fi
     }
 }
