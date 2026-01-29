@@ -38,6 +38,10 @@ jobs:
         with:
           path: giallo-kak
 
+      - name: Configure git to use HTTPS for submodules
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
       - name: Clone giallo repository with submodules
         run: |
           git clone --recursive --depth 1 ${{ env.GIALLO_REPO }} giallo
