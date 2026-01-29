@@ -60,7 +60,7 @@ fn strip_hash(hex: &str) -> &str {
     }
 }
 
-fn style_to_face_spec(style: &giallo::Style) -> String {
+fn style_to_face_spec(style: &giallo::Style, default_bg: Option<&str>) -> String {
     let mut attrs = String::new();
     if style.font_style.contains(giallo::FontStyle::BOLD) {
         attrs.push('b');
@@ -80,10 +80,21 @@ fn style_to_face_spec(style: &giallo::Style) -> String {
     let fg = strip_hash(&fg_hex);
     let bg = strip_hash(&bg_hex);
 
-    if attrs.is_empty() {
-        format!("rgb:{fg},rgb:{bg}")
+    // If background matches default theme background, use "default" to preserve terminal transparency
+    let bg_spec = if let Some(default_bg_hex) = default_bg {
+        if strip_hash(default_bg_hex) == bg {
+            String::from("default")
+        } else {
+            format!("rgb:{bg}")
+        }
     } else {
-        format!("rgb:{fg},rgb:{bg}+{attrs}")
+        format!("rgb:{bg}")
+    };
+
+    if attrs.is_empty() {
+        format!("rgb:{fg},{bg_spec}")
+    } else {
+        format!("rgb:{fg},{bg_spec}+{attrs}")
     }
 }
 
@@ -94,6 +105,7 @@ fn build_kakoune_commands(highlighted: &giallo::HighlightedCode<'_>) -> (Vec<Fac
     };
 
     let default_style = theme.default_style;
+    let default_bg = default_style.background.as_hex();
 
     let mut faces: Vec<FaceDef> = Vec::new();
     let mut face_map: HashMap<StyleKey, String> = HashMap::new();
@@ -126,7 +138,7 @@ fn build_kakoune_commands(highlighted: &giallo::HighlightedCode<'_>) -> (Vec<Fac
                 } else {
                     face_counter += 1;
                     let name = format!("giallo_{face_counter:04}");
-                    let spec = style_to_face_spec(&style);
+                    let spec = style_to_face_spec(&style, Some(&default_bg));
                     faces.push(FaceDef {
                         name: name.clone(),
                         spec,
