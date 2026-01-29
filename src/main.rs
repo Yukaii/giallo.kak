@@ -426,7 +426,7 @@ fn parse_args() -> (Mode, bool) {
             }
             "--verbose" | "-v" => verbose = true,
             "--oneshot" => oneshot = true,
-            "--kakoune" | "--print-rc" => kakoune_rc = true,
+            "init" | "--kakoune" | "--print-rc" => kakoune_rc = true,
             "--fifo" => {
                 if let Some(path) = args.next() {
                     fifo_req = Some(path);

@@ -51,12 +51,11 @@ The binary will be at `target/release/giallo-kak`.
 
 ## Usage
 
-Add to your Kakoune `kakrc` initialization:
+Add to your Kakoune `kakrc`:
 
 ```kak
 evaluate-commands %sh{
-  # other init commands...
-  giallo-kak --print-rc
+  giallo-kak init
 }
 ```
 
