@@ -420,7 +420,7 @@ fn parse_args() -> (Mode, bool) {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--version" => {
-                println!("giallo-kak 0.1.0");
+                println!("giallo-kak {}", env!("CARGO_PKG_VERSION"));
                 process::exit(0);
             }
             "--verbose" | "-v" => verbose = true,
