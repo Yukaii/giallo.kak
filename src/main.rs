@@ -469,6 +469,8 @@ struct Config {
     theme: Option<String>,
     #[serde(default)]
     language_map: HashMap<String, String>,
+    #[serde(default)]
+    grammars_path: Option<String>,
 }
 
 impl Config {
@@ -503,6 +505,46 @@ impl Config {
 }
 
 const DEFAULT_THEME: &str = "catppuccin-frappe";
+
+/// Load custom grammars from the given directory path
+fn load_custom_grammars(registry: &mut Registry, grammars_path: &str) -> io::Result<()> {
+    let path = Path::new(grammars_path);
+    if !path.exists() {
+        log::debug!("grammars path does not exist: {}", grammars_path);
+        return Ok(());
+    }
+
+    let entries = fs::read_dir(path)?;
+    let mut loaded_count = 0;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path
+            .extension()
+            .map_or(false, |ext| ext == "json" || ext == "plist")
+        {
+            log::debug!("loading grammar from: {}", path.display());
+            match registry.add_grammar_from_path(&path) {
+                Ok(_) => {
+                    log::info!("loaded grammar: {}", path.display());
+                    loaded_count += 1;
+                }
+                Err(err) => {
+                    log::error!("failed to load grammar {}: {}", path.display(), err);
+                }
+            }
+        }
+    }
+
+    log::info!(
+        "loaded {} custom grammars from {}",
+        loaded_count,
+        grammars_path
+    );
+    Ok(())
+}
 
 fn config_path() -> PathBuf {
     if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
@@ -796,11 +838,19 @@ fn main() {
     };
     log::debug!("registry loaded successfully");
 
-    registry.link_grammars();
-    log::debug!("grammars linked");
-
     let config = Config::load();
     log::debug!("config loaded: {:?}", config);
+
+    // Load custom grammars from config
+    if let Some(ref grammars_path) = config.grammars_path {
+        if let Err(err) = load_custom_grammars(&mut registry, grammars_path) {
+            log::error!("failed to load custom grammars: {err}");
+            eprintln!("warning: failed to load custom grammars: {err}");
+        }
+    }
+
+    registry.link_grammars();
+    log::debug!("grammars linked");
 
     match mode {
         Mode::Stdio => {

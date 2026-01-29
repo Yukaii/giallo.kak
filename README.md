@@ -77,6 +77,55 @@ giallo-enable
 giallo-set-theme kanagawa-wave
 ```
 
+## Custom Grammars
+
+To add custom TextMate grammars, you need to build a custom registry dump:
+
+1. **Get the grammar file** (.json or .plist) - from VSCode extensions or [shikijs/textmate-grammars-themes](https://github.com/shikijs/textmate-grammars-themes)
+
+2. **Create a Rust project** using the `giallo` crate:
+
+```rust
+use giallo::Registry;
+
+fn main() {
+    let mut registry = Registry::default();
+    
+    // Load the builtin dump first (optional, for base grammars)
+    let builtin = Registry::builtin().unwrap();
+    // Or start fresh with Registry::default()
+    
+    // Add custom grammars from files
+    for entry in std::fs::read_dir("/path/to/grammars").unwrap() {
+        let path = entry.unwrap().path();
+        registry.add_grammar_from_path(&path).unwrap();
+    }
+    
+    // IMPORTANT: Link grammars to resolve dependencies (include/embed patterns)
+    registry.link_grammars();
+    
+    // Add custom themes the same way
+    registry.add_theme_from_path("/path/to/theme.json").unwrap();
+    
+    // Save the registry dump
+    registry.save_to_file("custom.msgpack").unwrap();
+}
+```
+
+3. **Build giallo.kak from source** with your custom dump:
+
+```bash
+# Replace the builtin dump
+cp custom.msgpack /path/to/giallo.kak/builtin.msgpack
+cargo build --release
+```
+
+The registry API provides these methods:
+- `Registry::add_grammar_from_path(path)` - Add a grammar from a JSON/plist file
+- `Registry::link_grammars()` - Resolve grammar dependencies (required after adding grammars)
+- `Registry::add_theme_from_path(path)` - Add a theme from a JSON file  
+- `Registry::save_to_file(path)` - Save the compiled registry to a msgpack file
+
 ## Config
 
 Config file path:
