@@ -34,7 +34,7 @@ jobs:
 
     steps:
       - name: Checkout giallo.kak
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: giallo-kak
 
@@ -50,9 +50,9 @@ jobs:
           cache-dependency-path: giallo/package-lock.json
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -116,7 +116,7 @@ jobs:
 
     steps:
       - name: Checkout giallo.kak
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -167,7 +167,7 @@ jobs:
 
     steps:
       - name: Checkout giallo.kak
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
