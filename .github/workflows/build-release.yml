@@ -9,10 +9,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  GIALLO_REPO: https://github.com/getzola/giallo.git
 
 jobs:
-  # Build and test on multiple platforms
   build:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -21,83 +19,41 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary: giallo-kak
           - os: macos-latest
             target: x86_64-apple-darwin
-            binary: giallo-kak
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary: giallo-kak
 
     steps:
-      - name: Checkout giallo.kak
-        uses: actions/checkout@v5
-        with:
-          path: giallo-kak
+      - uses: actions/checkout@v5
 
-      - name: Configure git to use HTTPS for submodules
-        run: |
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-
-      - name: Clone giallo repository with submodules
-        run: |
-          git clone --recursive --depth 1 ${{ env.GIALLO_REPO }} giallo
-
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            giallo-kak
-            giallo
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Generate giallo builtin dump
-        working-directory: giallo
-        run: |
-          # Create empty file to satisfy include_bytes! during compilation
-          touch builtin.msgpack
-          # Generate grammar metadata
-          node scripts/extract-grammar-metadata.js
-          # Build and run the registry builder to generate real builtin.msgpack
-          cargo run --release --bin=build-registry --features=tools
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Copy builtin dump to giallo.kak
-        run: |
-          cp giallo/builtin.msgpack giallo-kak/
+      - name: Test
+        run: cargo test --release --target ${{ matrix.target }}
 
-      - name: Build giallo-kak
-        working-directory: giallo-kak
+      - name: Package
         run: |
-          cargo build --release --target ${{ matrix.target }}
-
-      - name: Run tests
-        working-directory: giallo-kak
-        run: |
-          cargo test --release --target ${{ matrix.target }}
-
-      - name: Package binary
-        shell: bash
-        run: |
-          cd giallo-kak
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
+          cp target/${{ matrix.target }}/release/giallo-kak dist/
           cd dist
-          tar czf ../giallo-kak-${{ matrix.target }}.tar.gz ${{ matrix.binary }}
+          tar czf ../giallo-kak-${{ matrix.target }}.tar.gz giallo-kak
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: giallo-kak-${{ matrix.target }}
           path: |
-            giallo-kak/dist/${{ matrix.binary }}
-            giallo-kak/giallo-kak-${{ matrix.target }}.*
+            dist/giallo-kak
+            giallo-kak-*.tar.gz
           if-no-files-found: error
 
-  # Create prerelease on main branch push
   prerelease:
     needs: build
     runs-on: ubuntu-latest
@@ -106,21 +62,17 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout giallo.kak
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: giallo-kak-*
 
-      - name: Get short SHA
-        id: sha
+      - id: sha
         run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Delete old prerelease
-        uses: dev-drprasad/delete-older-releases@v0.3.2
+      - uses: dev-drprasad/delete-older-releases@v0.3.2
         with:
           keep_latest: 0
           delete_tag_pattern: prerelease
@@ -128,27 +80,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
 
-      - name: Create Prerelease
-        uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v1
         with:
           tag_name: prerelease
           name: Prerelease (${{ steps.sha.outputs.sha }})
           body: |
-            This is a prerelease build from the latest commit on the main branch.
-            
-            Commit: ${{ steps.sha.outputs.sha }}
+            This is a prerelease build from commit ${{ steps.sha.outputs.sha }}.
             
             These binaries are automatically built and may contain unstable features.
-            For stable releases, please see the [releases page](https://github.com/Yukaii/giallo.kak/releases).
-          files: |
-            artifacts/giallo-kak-*/giallo-kak-*.tar.gz
-            artifacts/giallo-kak-*/giallo-kak-*.zip
-          draft: false
+            For stable releases, see the [releases page](https://github.com/Yukaii/giallo.kak/releases).
+          files: artifacts/giallo-kak-*/*.tar.gz
           prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Create release for tags
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -157,23 +102,16 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout giallo.kak
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: giallo-kak-*
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v1
         with:
-          files: |
-            artifacts/giallo-kak-*/giallo-kak-*.tar.gz
-            artifacts/giallo-kak-*/giallo-kak-*.zip
-          draft: false
-          prerelease: false
+          files: artifacts/giallo-kak-*/*.tar.gz
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
