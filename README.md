@@ -1,20 +1,20 @@
 # giallo.kak
 
-Kakoune integration for the `giallo` TextMate highlighter.
+Kakoune integration for the [`giallo`](https://github.com/getzola/giallo) TextMate highlighter.
 
 ## Installation
 
 ### From GitHub Releases (Recommended)
 
-Download pre-built binaries from the [Releases](https://github.com/YOUR_USERNAME/giallo.kak/releases) page:
+Download pre-built binaries from the [Releases](https://github.com/Yukaii/giallo.kak/releases) page:
 
 ```bash
 # Linux x86_64
-curl -L -o giallo-kak https://github.com/YOUR_USERNAME/giallo.kak/releases/latest/download/giallo-kak-x86_64-unknown-linux-gnu
+curl -L -o giallo-kak https://github.com/Yukaii/giallo.kak/releases/latest/download/giallo-kak-x86_64-unknown-linux-gnu
 cp giallo-kak ~/.local/bin/
 
 # macOS
-curl -L -o giallo-kak https://github.com/YOUR_USERNAME/giallo.kak/releases/latest/download/giallo-kak-x86_64-apple-darwin
+curl -L -o giallo-kak https://github.com/Yukaii/giallo.kak/releases/latest/download/giallo-kak-x86_64-apple-darwin
 cp giallo-kak ~/.local/bin/
 
 # Make executable
@@ -25,7 +25,7 @@ chmod +x ~/.local/bin/giallo-kak
 
 ```sh
 # 1. Clone this repository
-git clone https://github.com/YOUR_USERNAME/giallo.kak.git
+git clone https://github.com/Yukaii/giallo.kak.git
 cd giallo.kak
 
 # 2. Clone giallo dependency (required for the builtin dump)
@@ -110,10 +110,17 @@ The CI process automatically:
 
 ## Notes
 
-- The `giallo` builtin dump (`builtin.msgpack`) is required for `Registry::builtin()`.
-- The dump is generated in `../giallo` via:
+- The [`giallo`](https://github.com/getzola/giallo) builtin dump (`builtin.msgpack`) is required for `Registry::builtin()`.
+- The dump is generated in the giallo repository via:
 
 ```sh
 cd ../giallo
 just generate-dump
 ```
+
+## Special Thanks
+
+Special thanks to:
+
+- **jdugan6240** from the Kakoune community Discord for sharing [giallo](https://github.com/getzola/giallo) and inspiring this Kakoune integration project
+- [**kak-tree-sitter**](https://git.sr.ht/~hadronized/kak-tree-sitter) for the inspiration on the IPC architecture and FIFO-based communication pattern
