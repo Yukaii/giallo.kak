@@ -280,6 +280,9 @@ define-command -docstring "Rehighlight current buffer using giallo" giallo-rehig
         if [ "$kak_opt_giallo_enabled" = "true" ]; then
             printf 'try %%{ remove-highlighter buffer/giallo }\n'
             printf 'add-highlighter -override buffer/giallo ranges giallo_hl_ranges\n'
+            if [ -z "$kak_opt_giallo_buf_fifo_path" ]; then
+                printf 'giallo-init-buffer\n'
+            fi
         fi
         if [ "$kak_opt_giallo_debug" = "true" ] && [ "$kak_opt_giallo_enabled" = "true" ]; then
             echo "giallo-rehighlight: enabled=$kak_opt_giallo_enabled fifo=$kak_opt_giallo_buf_fifo_path lang=$kak_opt_giallo_lang" >&2
