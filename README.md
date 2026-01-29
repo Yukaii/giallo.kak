@@ -51,17 +51,19 @@ The binary will be at `target/release/giallo-kak`.
 
 ## Usage
 
-1) Source the Kakoune script:
+Add to your Kakoune `kakrc` initialization:
+
+```kak
+evaluate-commands %sh{
+  # other init commands...
+  giallo-kak --print-rc
+}
+```
+
+Or source the script directly:
 
 ```kak
 source /path/to/giallo.kak/rc/giallo.kak
-```
-
-Or print the embedded rc from the binary:
-
-```kak
-# From a shell, then source in Kakoune:
-# giallo-kak --print-rc
 ```
 
 2) Enable per-buffer (or it auto-enables for buffers with filetype):
