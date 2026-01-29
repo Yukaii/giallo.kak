@@ -8,12 +8,56 @@ declare-option -hidden str giallo_hl_ranges
 declare-option -hidden str giallo_buf_fifo_path
 declare-option -hidden str giallo_buf_sentinel
 declare-option -hidden bool giallo_enabled false
+declare-option -hidden str giallo_server_req
+declare-option -hidden str giallo_server_resp
+declare-option -hidden str giallo_server_pid
+
+define-command -docstring "Start giallo server with FIFO IPC" giallo-start-server %{
+    evaluate-commands %sh{
+        if [ -n "$kak_opt_giallo_server_req" ] && [ -p "$kak_opt_giallo_server_req" ]; then
+            exit 0
+        fi
+
+        tmpdir="${TMPDIR:-/tmp}"
+        dir="$(mktemp -d "$tmpdir/giallo-kak.XXXXXX")"
+        req="$dir/req.fifo"
+        resp="$dir/resp.fifo"
+        mkfifo "$req"
+        mkfifo "$resp"
+
+        giallo-kak --fifo "$req" --resp "$resp" >/dev/null 2>&1 &
+        pid=$!
+
+        printf 'set-option global giallo_server_req %s\n' "$req"
+        printf 'set-option global giallo_server_resp %s\n' "$resp"
+        printf 'set-option global giallo_server_pid %s\n' "$pid"
+    }
+}
+
+define-command -docstring "Stop giallo server" giallo-stop-server %{
+    evaluate-commands %sh{
+        if [ -n "$kak_opt_giallo_server_pid" ]; then
+            kill "$kak_opt_giallo_server_pid" >/dev/null 2>&1 || true
+        fi
+        if [ -n "$kak_opt_giallo_server_req" ]; then
+            rm -f "$kak_opt_giallo_server_req"
+        fi
+        if [ -n "$kak_opt_giallo_server_resp" ]; then
+            rm -f "$kak_opt_giallo_server_resp"
+        fi
+
+        printf 'set-option global giallo_server_req ""\n'
+        printf 'set-option global giallo_server_resp ""\n'
+        printf 'set-option global giallo_server_pid ""\n'
+    }
+}
 
 # Enable giallo highlighting for current buffer
 # TODO: wire IPC and automatic updates.
 define-command -docstring "Enable giallo highlighting for the current buffer" giallo-enable %{ 
     set-option buffer giallo_enabled true
     add-highlighter -override buffer/giallo ranges giallo_hl_ranges
+    giallo-start-server
     giallo-rehighlight
 }
 
@@ -31,6 +75,10 @@ define-command -docstring "Rehighlight current buffer using giallo" giallo-rehig
             exit 0
         fi
 
+        if [ -z "$kak_opt_giallo_server_req" ] || [ ! -p "$kak_opt_giallo_server_req" ]; then
+            printf 'giallo-start-server\n'
+        fi
+
         lang="$kak_opt_giallo_lang"
         theme="$kak_opt_giallo_theme"
 
@@ -44,10 +92,23 @@ define-command -docstring "Rehighlight current buffer using giallo" giallo-rehig
         content="$kak_bufstr"
         len=$(printf %s "$content" | wc -c | tr -d '[:space:]')
 
-        {
-            printf 'H %s %s %s\n' "$lang" "$theme" "$len"
-            printf %s "$content"
-        } | giallo-kak --oneshot
+        if [ -n "$kak_opt_giallo_server_req" ] && [ -p "$kak_opt_giallo_server_req" ]; then
+            {
+                printf 'H %s %s %s\n' "$lang" "$theme" "$len"
+                printf %s "$content"
+            } > "$kak_opt_giallo_server_req"
+
+            IFS= read -r header < "$kak_opt_giallo_server_resp"
+            set -- $header
+            if [ "$1" = "OK" ] && [ -n "$2" ]; then
+                dd bs=1 count="$2" < "$kak_opt_giallo_server_resp" 2>/dev/null
+            fi
+        else
+            {
+                printf 'H %s %s %s\n' "$lang" "$theme" "$len"
+                printf %s "$content"
+            } | giallo-kak --oneshot
+        fi
     }
 }
 
