@@ -1,0 +1,137 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  GIALLO_REPO: https://github.com/getzola/giallo.git
+
+jobs:
+  # Build and test on multiple platforms
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: giallo-kak
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: giallo-kak
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: giallo-kak
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: giallo-kak.exe
+
+    steps:
+      - name: Checkout giallo.kak
+        uses: actions/checkout@v4
+        with:
+          path: giallo-kak
+
+      - name: Clone giallo repository
+        run: |
+          git clone --depth 1 ${{ env.GIALLO_REPO }} giallo
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: giallo/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            giallo-kak
+            giallo
+
+      - name: Generate giallo builtin dump
+        working-directory: giallo
+        run: |
+          npm install
+          node scripts/extract-grammar-metadata.js
+          cargo run --release --bin=build-registry --features=tools
+
+      - name: Copy builtin dump to giallo.kak
+        run: |
+          cp giallo/builtin.msgpack giallo-kak/
+
+      - name: Build giallo-kak
+        working-directory: giallo-kak
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Run tests
+        working-directory: giallo-kak
+        run: |
+          cargo test --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        shell: bash
+        run: |
+          cd giallo-kak
+          mkdir -p dist
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
+            cd dist
+            7z a ../giallo-kak-${{ matrix.target }}.zip ${{ matrix.binary }}
+          else
+            cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
+            cd dist
+            tar czf ../giallo-kak-${{ matrix.target }}.tar.gz ${{ matrix.binary }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: giallo-kak-${{ matrix.target }}
+          path: |
+            giallo-kak/dist/${{ matrix.binary }}
+            giallo-kak/giallo-kak-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  # Create release for tags
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout giallo.kak
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: giallo-kak-*
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/giallo-kak-*/giallo-kak-*.tar.gz
+            artifacts/giallo-kak-*/giallo-kak-*.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
