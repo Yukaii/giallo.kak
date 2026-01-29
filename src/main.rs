@@ -4,6 +4,7 @@ use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::thread;
+use std::process::{Command, Stdio};
 
 use giallo::{HighlightOptions, Registry, ThemeVariant, PLAIN_GRAMMAR_NAME};
 use serde::Deserialize;
@@ -22,6 +23,13 @@ struct StyleKey {
 struct FaceDef {
     name: String,
     spec: String,
+}
+
+#[derive(Clone, Debug)]
+struct BufferContext {
+    session: String,
+    buffer: String,
+    sentinel: String,
 }
 
 fn normalize_hex(hex: &str) -> String {
@@ -171,6 +179,109 @@ fn read_exact_bytes(reader: &mut impl Read, len: usize) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
+fn kak_quote(input: &str) -> String {
+    input.replace('\'', "''")
+}
+
+fn send_to_kak(session: &str, buffer: &str, payload: &str) -> io::Result<()> {
+    let mut cmd = String::new();
+    cmd.push_str("evaluate-commands -no-hooks -buffer '");
+    cmd.push_str(&kak_quote(buffer));
+    cmd.push_str("' -- %[ ");
+    cmd.push_str(payload);
+    cmd.push_str(" ]\n");
+
+    let mut child = Command::new("kak")
+        .arg("-p")
+        .arg(session)
+        .stdin(Stdio::piped())
+        .spawn()?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(cmd.as_bytes())?;
+    }
+    let _ = child.wait()?;
+    Ok(())
+}
+
+fn highlight_and_send(
+    text: &str,
+    lang: &str,
+    theme: &str,
+    registry: &mut Registry,
+    config: &Config,
+    ctx: &BufferContext,
+) {
+    let resolved_lang = config.resolve_lang(lang);
+    let resolved_theme = config.resolve_theme(theme);
+
+    let options = HighlightOptions::new(&resolved_lang, ThemeVariant::Single(resolved_theme));
+    let highlighted = match registry.highlight(text, &options) {
+        Ok(h) => h,
+        Err(_) => {
+            let fallback =
+                HighlightOptions::new(PLAIN_GRAMMAR_NAME, ThemeVariant::Single(resolved_theme));
+            match registry.highlight(text, &fallback) {
+                Ok(h) => h,
+                Err(err) => {
+                    eprintln!("highlight error: {err}");
+                    return;
+                }
+            }
+        }
+    };
+
+    let (faces, ranges) = build_kakoune_commands(&highlighted);
+    let commands = build_commands(&faces, &ranges);
+    if let Err(err) = send_to_kak(&ctx.session, &ctx.buffer, &commands) {
+        eprintln!("failed to send highlights to kak: {err}");
+    }
+}
+
+fn run_buffer_fifo<R: BufRead>(
+    mut reader: R,
+    registry: &mut Registry,
+    config: &Config,
+    ctx: BufferContext,
+) -> io::Result<()> {
+    let mut buf = String::new();
+    let mut line = String::new();
+    let mut current_lang = String::new();
+    let mut current_theme = String::new();
+
+    loop {
+        line.clear();
+        let bytes = reader.read_line(&mut line)?;
+        if bytes == 0 {
+            break;
+        }
+
+        let trimmed = line.trim_end_matches(['\n', '\r']);
+        if trimmed == ctx.sentinel {
+            if !current_lang.is_empty() {
+                highlight_and_send(&buf, &current_lang, &current_theme, registry, config, &ctx);
+            }
+            buf.clear();
+            current_lang.clear();
+            current_theme.clear();
+            continue;
+        }
+
+        if trimmed.starts_with("H ") {
+            let mut parts = trimmed.splitn(3, ' ');
+            let _ = parts.next();
+            current_lang = parts.next().unwrap_or("").to_string();
+            current_theme = parts.next().unwrap_or("").to_string();
+            buf.clear();
+            continue;
+        }
+
+        buf.push_str(&line);
+    }
+
+    Ok(())
+}
+
 enum Mode {
     Stdio,
     Oneshoot,
@@ -289,24 +400,17 @@ fn create_fifo(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn handle_init(
-    token: &str,
-    base_dir: &Path,
-) -> io::Result<(PathBuf, PathBuf, String)> {
+fn handle_init(token: &str, base_dir: &Path) -> io::Result<(PathBuf, String)> {
     fs::create_dir_all(base_dir)?;
     let hash = token_hash(token);
     let req = base_dir.join(format!("{hash}.req.fifo"));
-    let resp = base_dir.join(format!("{hash}.resp.fifo"));
     let sentinel = format!("giallo-{hash}");
 
     if !req.exists() {
         create_fifo(&req)?;
     }
-    if !resp.exists() {
-        create_fifo(&resp)?;
-    }
 
-    Ok((req, resp, sentinel))
+    Ok((req, sentinel))
 }
 
 fn run_server<R: BufRead, W: Write>(
@@ -316,6 +420,7 @@ fn run_server<R: BufRead, W: Write>(
     config: &Config,
     oneshot: bool,
     base_dir: Option<&Path>,
+    ctx: Option<BufferContext>,
 ) -> io::Result<()> {
     let mut line = String::new();
     loop {
@@ -340,6 +445,20 @@ fn run_server<R: BufRead, W: Write>(
         let cmd = parts.next().unwrap_or("");
 
         if cmd == "INIT" {
+            let session = match parts.next() {
+                Some(v) => v.to_string(),
+                None => {
+                    eprintln!("missing session");
+                    continue;
+                }
+            };
+            let buffer = match parts.next() {
+                Some(v) => v.to_string(),
+                None => {
+                    eprintln!("missing buffer");
+                    continue;
+                }
+            };
             let token = match parts.next() {
                 Some(v) => v.to_string(),
                 None => {
@@ -352,7 +471,7 @@ fn run_server<R: BufRead, W: Write>(
                 continue;
             };
 
-            let (req, resp, sentinel) = match handle_init(&token, base_dir) {
+            let (req, sentinel) = match handle_init(&token, base_dir) {
                 Ok(v) => v,
                 Err(err) => {
                     eprintln!("init error: {err}");
@@ -361,16 +480,26 @@ fn run_server<R: BufRead, W: Write>(
             };
 
             let commands = format!(
-                "set-option buffer giallo_buf_fifo_path {req}\nset-option buffer giallo_buf_resp_path {resp}\nset-option buffer giallo_buf_sentinel {sentinel}\n",
+                "set-option buffer giallo_buf_fifo_path {req}\nset-option buffer giallo_buf_sentinel {sentinel}\n",
                 req = req.display(),
-                resp = resp.display(),
                 sentinel = sentinel
             );
 
             let req_path = req.clone();
-            let resp_path = resp.clone();
             let token_clone = token.clone();
             let config_clone = config.clone();
+            let ctx = BufferContext {
+                session: session.clone(),
+                buffer: buffer.clone(),
+                sentinel: sentinel.clone(),
+            };
+            let req_file = match OpenOptions::new().read(true).write(true).open(&req_path) {
+                Ok(file) => file,
+                Err(err) => {
+                    eprintln!("init thread open req error ({token_clone}): {err}");
+                    continue;
+                }
+            };
             thread::spawn(move || {
                 let mut registry = match Registry::builtin() {
                     Ok(registry) => registry,
@@ -381,42 +510,14 @@ fn run_server<R: BufRead, W: Write>(
                 };
                 registry.link_grammars();
 
-                let req_file = match OpenOptions::new().read(true).open(&req_path) {
-                    Ok(file) => file,
-                    Err(err) => {
-                        eprintln!("init thread open req error ({token_clone}): {err}");
-                        return;
-                    }
-                };
-                let resp_file = match OpenOptions::new().write(true).open(&resp_path) {
-                    Ok(file) => file,
-                    Err(err) => {
-                        eprintln!("init thread open resp error ({token_clone}): {err}");
-                        return;
-                    }
-                };
-
                 let mut req_reader = io::BufReader::new(req_file);
-                let mut resp_writer = resp_file;
-                let _ = run_server(
-                    &mut req_reader,
-                    &mut resp_writer,
-                    &mut registry,
-                    &config_clone,
-                    false,
-                    None,
-                );
+                let _ = run_buffer_fifo(&mut req_reader, &mut registry, &config_clone, ctx);
 
                 let _ = fs::remove_file(&req_path);
-                let _ = fs::remove_file(&resp_path);
             });
 
-            if oneshot {
-                writer.write_all(commands.as_bytes())?;
-                writer.flush()?;
-                break;
-            } else {
-                write_response(&mut writer, &commands)?;
+            if let Err(err) = send_to_kak(&session, &buffer, &commands) {
+                eprintln!("failed to send init to kak: {err}");
             }
             continue;
         }
@@ -491,7 +592,11 @@ fn run_server<R: BufRead, W: Write>(
         let (faces, ranges) = build_kakoune_commands(&highlighted);
         let commands = build_commands(&faces, &ranges);
 
-        if oneshot {
+        if let Some(ref ctx) = ctx {
+            if let Err(err) = send_to_kak(&ctx.session, &ctx.buffer, &commands) {
+                eprintln!("failed to send highlights to kak: {err}");
+            }
+        } else if oneshot {
             writer.write_all(commands.as_bytes())?;
             writer.flush()?;
             break;
@@ -536,6 +641,7 @@ fn main() {
                 &config,
                 false,
                 Some(&base_dir),
+                None,
             ) {
                 eprintln!("server error: {err}");
             }
@@ -552,12 +658,13 @@ fn main() {
                 &config,
                 true,
                 Some(&base_dir),
+                None,
             ) {
                 eprintln!("oneshot error: {err}");
             }
         }
         Mode::Fifo { req, resp } => {
-            let req_file = match OpenOptions::new().read(true).open(&req) {
+            let req_file = match OpenOptions::new().read(true).write(true).open(&req) {
                 Ok(file) => file,
                 Err(err) => {
                     eprintln!("failed to open fifo for read: {req}: {err}");
@@ -586,6 +693,7 @@ fn main() {
                 &config,
                 false,
                 Some(&base_dir),
+                None,
             )
             {
                 eprintln!("fifo server error: {err}");

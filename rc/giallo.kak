@@ -4,15 +4,12 @@
 # Buffer-local options
 declare-option -hidden str giallo_lang
 declare-option -hidden str giallo_theme
-declare-option -hidden str giallo_hl_ranges
+declare-option -hidden range-specs giallo_hl_ranges
 declare-option -hidden str giallo_buf_fifo_path
-declare-option -hidden str giallo_buf_resp_path
 declare-option -hidden str giallo_buf_sentinel
 declare-option -hidden bool giallo_enabled false
-declare-option -hidden bool giallo_busy false
-declare-option -hidden str giallo_last_ms
+declare-option -hidden int giallo_buf_update_timestamp -1
 declare-option -hidden str giallo_server_req
-declare-option -hidden str giallo_server_resp
 declare-option -hidden str giallo_server_pid
 
 define-command -docstring "Start giallo server with FIFO IPC" giallo-start-server %{
@@ -24,15 +21,12 @@ define-command -docstring "Start giallo server with FIFO IPC" giallo-start-serve
         tmpdir="${TMPDIR:-/tmp}"
         dir="$(mktemp -d "$tmpdir/giallo-kak.XXXXXX")"
         req="$dir/req.fifo"
-        resp="$dir/resp.fifo"
         mkfifo "$req"
-        mkfifo "$resp"
 
-        giallo-kak --fifo "$req" --resp "$resp" >/dev/null 2>&1 &
+        giallo-kak --fifo "$req" >/dev/null 2>&1 &
         pid=$!
 
         printf 'set-option global giallo_server_req %s\n' "$req"
-        printf 'set-option global giallo_server_resp %s\n' "$resp"
         printf 'set-option global giallo_server_pid %s\n' "$pid"
     }
 }
@@ -45,12 +39,7 @@ define-command -docstring "Stop giallo server" giallo-stop-server %{
         if [ -n "$kak_opt_giallo_server_req" ]; then
             rm -f "$kak_opt_giallo_server_req"
         fi
-        if [ -n "$kak_opt_giallo_server_resp" ]; then
-            rm -f "$kak_opt_giallo_server_resp"
-        fi
-
         printf 'set-option global giallo_server_req ""\n'
-        printf 'set-option global giallo_server_resp ""\n'
         printf 'set-option global giallo_server_pid ""\n'
     }
 }
@@ -62,7 +51,6 @@ define-command -docstring "Enable giallo highlighting for the current buffer" gi
     add-highlighter -override buffer/giallo ranges giallo_hl_ranges
     giallo-start-server
     giallo-init-buffer
-    giallo-rehighlight
 }
 
 # Disable giallo highlighting for current buffer
@@ -71,93 +59,62 @@ define-command -docstring "Disable giallo highlighting for the current buffer" g
     remove-highlighter buffer/giallo
     set-option buffer giallo_hl_ranges ""
     set-option buffer giallo_buf_fifo_path ""
-    set-option buffer giallo_buf_resp_path ""
     set-option buffer giallo_buf_sentinel ""
-    set-option buffer giallo_busy false
-    set-option buffer giallo_last_ms ""
+    set-option buffer giallo_buf_update_timestamp -1
 }
 
 # Initialize per-buffer FIFO via server handshake.
 define-command -docstring "Initialize per-buffer FIFO for giallo" giallo-init-buffer %{
-    evaluate-commands %sh{
-        if [ -z "$kak_opt_giallo_server_req" ] || [ ! -p "$kak_opt_giallo_server_req" ]; then
+    evaluate-commands -no-hooks %sh{
+        fifo="$kak_opt_giallo_server_req"
+        if [ -z "$fifo" ] || [ ! -p "$fifo" ]; then
             printf 'giallo-start-server\n'
-        fi
-        if [ -z "$kak_opt_giallo_buf_fifo_path" ] || [ ! -p "$kak_opt_giallo_buf_fifo_path" ]; then
-            printf 'giallo-init-buffer\n'
+            exit 0
         fi
 
-        token="${kak_bufname:-buffer}"
+        session="$kak_session"
+        buffer="$kak_bufname"
 
-        {
-            printf 'INIT %s\n' "$token"
-        } > "$kak_opt_giallo_server_req"
-
-        IFS= read -r header < "$kak_opt_giallo_server_resp"
-        set -- $header
-        if [ "$1" = "OK" ] && [ -n "$2" ]; then
-            dd bs=1 count="$2" < "$kak_opt_giallo_server_resp" 2>/dev/null
-        fi
+        # Write to FIFO in background to avoid blocking UI if server isn't ready yet.
+        sh -c "printf 'INIT %s %s %s\n' '$session' '$buffer' '$buffer' > '$fifo'" >/dev/null 2>&1 &
     }
 }
 
-# Force a rehighlight (placeholder)
+# Send buffer content to the server.
+define-command -hidden giallo-buffer-update %{
+    evaluate-commands -no-hooks %sh{
+        if [ -z "$kak_opt_giallo_buf_fifo_path" ]; then
+            exit 0
+        fi
+        printf 'evaluate-commands -no-hooks %%{\n'
+        printf 'echo -to-file "%%opt{giallo_buf_fifo_path}" -- "H %%opt{giallo_lang} %%opt{giallo_theme}"\n'
+        printf 'write "%%opt{giallo_buf_fifo_path}"\n'
+        printf 'echo -to-file "%%opt{giallo_buf_fifo_path}" -- "%%opt{giallo_buf_sentinel}"\n'
+        printf '}\n'
+    }
+}
+
+# Execute a command only if buffer timestamp changed.
+define-command -hidden giallo-exec-if-changed -params 1 %{
+    set-option -remove buffer giallo_buf_update_timestamp %val{timestamp}
+
+    try %{
+        evaluate-commands "giallo-exec-nop-%opt{giallo_buf_update_timestamp}"
+        set-option buffer giallo_buf_update_timestamp %val{timestamp}
+    } catch %{
+        set-option buffer giallo_buf_update_timestamp %val{timestamp}
+        evaluate-commands %arg{1}
+    }
+}
+
+define-command -hidden giallo-exec-nop-0 nop
+
+# Force a rehighlight
 define-command -docstring "Rehighlight current buffer using giallo" giallo-rehighlight %{ 
-    evaluate-commands %sh{
-        if [ "$kak_opt_giallo_enabled" != "true" ]; then
-            exit 0
+    evaluate-commands -no-hooks %sh{
+        if [ "$kak_opt_giallo_enabled" = "true" ]; then
+            printf 'giallo-exec-if-changed giallo-buffer-update\n'
         fi
-        if [ "$kak_opt_giallo_busy" = "true" ]; then
-            exit 0
-        fi
-
-        now_ms=$(date +%s%3N 2>/dev/null || date +%s000)
-        if [ -n "$kak_opt_giallo_last_ms" ]; then
-            delta=$((now_ms - kak_opt_giallo_last_ms))
-            if [ "$delta" -lt 80 ]; then
-                exit 0
-            fi
-        fi
-
-        printf 'set-option buffer giallo_busy true\n'
-        printf 'set-option buffer giallo_last_ms %s\n' "$now_ms"
-
-        if [ -z "$kak_opt_giallo_server_req" ] || [ ! -p "$kak_opt_giallo_server_req" ]; then
-            printf 'giallo-start-server\n'
-        fi
-        if [ -z "$kak_opt_giallo_buf_fifo_path" ] || [ ! -p "$kak_opt_giallo_buf_fifo_path" ]; then
-            printf 'giallo-init-buffer\n'
-        fi
-
-        lang="$kak_opt_giallo_lang"
-        theme="$kak_opt_giallo_theme"
-
-        if [ -z "$lang" ]; then
-            lang="$kak_opt_filetype"
-        fi
-
-        content="$kak_bufstr"
-        len=$(printf %s "$content" | wc -c | tr -d '[:space:]')
-
-        if [ -n "$kak_opt_giallo_buf_fifo_path" ] && [ -p "$kak_opt_giallo_buf_fifo_path" ] && [ -n "$kak_opt_giallo_buf_resp_path" ] && [ -p "$kak_opt_giallo_buf_resp_path" ]; then
-            {
-                printf 'H %s %s %s\n' "$lang" "$theme" "$len"
-                printf %s "$content"
-            } > "$kak_opt_giallo_buf_fifo_path"
-
-            IFS= read -r header < "$kak_opt_giallo_buf_resp_path"
-            set -- $header
-            if [ "$1" = "OK" ] && [ -n "$2" ]; then
-                dd bs=1 count="$2" < "$kak_opt_giallo_buf_resp_path" 2>/dev/null
-            fi
-        else
-            {
-                printf 'H %s %s %s\n' "$lang" "$theme" "$len"
-                printf %s "$content"
-            } | giallo-kak --oneshot
-        fi
-
-        printf 'set-option buffer giallo_busy false\n'
     }
 }
 
@@ -170,7 +127,7 @@ define-command -params 1 -docstring "Set giallo theme for current buffer" giallo
 # Auto set giallo_lang from filetype unless explicitly set.
 hook -group giallo global BufSetOption filetype=.* %{
     evaluate-commands %sh{
-        if [ -z "$kak_opt_giallo_lang" ]; then
+        if [ -z "$kak_opt_giallo_lang" ] && [ -n "$kak_opt_filetype" ]; then
             printf 'set-option buffer giallo_lang %s\n' "$kak_opt_filetype"
         fi
     }
@@ -180,7 +137,6 @@ hook -group giallo global BufSetOption filetype=.* %{
 hook -group giallo global NormalIdle .* %{ giallo-rehighlight }
 
 # Also refresh on major buffer lifecycle events.
-hook -group giallo global BufOpen .* %{ giallo-rehighlight }
 hook -group giallo global BufReload .* %{ giallo-rehighlight }
 hook -group giallo global BufWritePost .* %{ giallo-rehighlight }
 hook -group giallo global InsertChar .* %{ giallo-rehighlight }
