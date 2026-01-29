@@ -175,12 +175,14 @@ enum Mode {
     Stdio,
     Oneshoot,
     Fifo { req: String, resp: Option<String> },
+    KakouneRc,
 }
 
 fn parse_args() -> Mode {
     let mut oneshot = false;
     let mut fifo_req: Option<String> = None;
     let mut fifo_resp: Option<String> = None;
+    let mut kakoune_rc = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -190,6 +192,7 @@ fn parse_args() -> Mode {
                 process::exit(0);
             }
             "--oneshot" => oneshot = true,
+            "--kakoune" | "--print-rc" => kakoune_rc = true,
             "--fifo" => {
                 if let Some(path) = args.next() {
                     fifo_req = Some(path);
@@ -206,6 +209,10 @@ fn parse_args() -> Mode {
 
     if let Some(req) = fifo_req {
         return Mode::Fifo { req, resp: fifo_resp };
+    }
+
+    if kakoune_rc {
+        return Mode::KakouneRc;
     }
 
     if oneshot {
@@ -500,6 +507,12 @@ fn main() {
     let mode = parse_args();
     let base_dir = std::env::temp_dir().join(format!("giallo-kak-{}", process::id()));
 
+    if let Mode::KakouneRc = mode {
+        const RC: &str = include_str!("../rc/giallo.kak");
+        println!("{RC}");
+        return;
+    }
+
     let mut registry = match Registry::builtin() {
         Ok(registry) => registry,
         Err(err) => {
@@ -578,5 +591,6 @@ fn main() {
                 eprintln!("fifo server error: {err}");
             }
         }
+        Mode::KakouneRc => {}
     }
 }

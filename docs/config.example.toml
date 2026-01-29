@@ -1,0 +1,11 @@
+# giallo.kak config example
+
+# Default theme when buffer doesn't set giallo_theme
+# theme = "catppuccin-frappe"
+
+# Map Kakoune filetypes to giallo language IDs
+# [language_map]
+# javascript = "javascript"
+# typescript = "typescript"
+# rust = "rust"
+# sh = "shellscript"
