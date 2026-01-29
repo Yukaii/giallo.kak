@@ -32,3 +32,29 @@ The server starts correctly, creates per-buffer FIFOs, and spawns threads. Howev
 3. Enable on buffer
 4. Run `giallo-force-update`
 5. Check for new error messages in Kakoune and server log
+
+---
+
+## Memory Optimization (Jan 2026)
+
+### Problem
+Each buffer spawn created a new thread that loaded its own `Registry::builtin()`, consuming 70-90MB per buffer. With multiple buffers open, memory usage grew linearly.
+
+### Solution
+Wrapped the registry in `Arc<Registry>` to share it across all buffer handler threads:
+
+**Changes in `main.rs`:**
+1. Registry loaded once in main and wrapped in `Arc::new(registry)`
+2. `Arc::clone(&registry)` passed to each buffer thread instead of loading new registry
+3. Updated function signatures to accept `Arc<Registry>` or `&Registry`
+4. Removed per-thread `Registry::builtin()` call
+
+### Result
+- **Before**: ~70-90MB per buffer
+- **After**: ~1-2MB per buffer (shared registry + thread overhead)
+
+### Technical Details
+- `giallo::Registry` implements both `Send` and `Sync`, making it safe to share across threads
+- `Arc` (Atomically Reference Counted) allows multiple owners of the same data
+- Registry is read-only after initialization, so no synchronization primitives needed
+- `highlight()` method only requires `&self`, enabling concurrent read access

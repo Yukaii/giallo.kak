@@ -269,7 +269,7 @@ fn highlight_and_send(
     text: &str,
     lang: &str,
     theme: &str,
-    registry: &mut Registry,
+    registry: &Registry,
     config: &Config,
     ctx: &BufferContext,
 ) {
@@ -338,7 +338,7 @@ fn highlight_and_send(
 
 fn run_buffer_fifo<R: BufRead>(
     mut reader: R,
-    registry: &mut Registry,
+    registry: &Registry,
     config: &Config,
     ctx: BufferContext,
     quit_flag: Option<&Arc<AtomicBool>>,
@@ -610,7 +610,7 @@ fn handle_init(token: &str, base_dir: &Path) -> io::Result<(PathBuf, String)> {
 fn run_server<R: BufRead, W: Write>(
     mut reader: R,
     mut writer: W,
-    registry: &mut Registry,
+    registry: Arc<Registry>,
     config: &Config,
     oneshot: bool,
     base_dir: Option<&Path>,
@@ -728,27 +728,15 @@ fn run_server<R: BufRead, W: Write>(
             };
             log::debug!("INIT: spawning buffer handler thread");
             let thread_quit_flag = resources.quit_flag();
+            let thread_registry = registry.clone();
             thread::spawn(move || {
                 log::debug!("buffer thread: starting for {}", token_clone);
-                let mut registry = match Registry::builtin() {
-                    Ok(registry) => registry,
-                    Err(err) => {
-                        log::error!(
-                            "buffer thread: failed to load registry ({}): {}",
-                            token_clone,
-                            err
-                        );
-                        eprintln!("init thread registry error ({token_clone}): {err}");
-                        return;
-                    }
-                };
-                registry.link_grammars();
-                log::debug!("buffer thread: registry ready for {}", token_clone);
+                log::debug!("buffer thread: using shared registry for {}", token_clone);
 
                 let mut req_reader = io::BufReader::new(req_file);
                 let _ = run_buffer_fifo(
                     &mut req_reader,
-                    &mut registry,
+                    &thread_registry,
                     &config_clone,
                     ctx,
                     Some(&thread_quit_flag),
@@ -904,6 +892,10 @@ fn main() {
     registry.link_grammars();
     log::debug!("grammars linked");
 
+    // Wrap registry in Arc for sharing across threads
+    let registry = Arc::new(registry);
+    log::debug!("registry wrapped in Arc for thread sharing");
+
     match mode {
         Mode::Stdio => {
             log::debug!("running in stdio mode");
@@ -914,7 +906,7 @@ fn main() {
             if let Err(err) = run_server(
                 &mut stdin_lock,
                 &mut stdout_lock,
-                &mut registry,
+                Arc::clone(&registry),
                 &config,
                 false,
                 Some(&base_dir),
@@ -934,7 +926,7 @@ fn main() {
             if let Err(err) = run_server(
                 &mut stdin_lock,
                 &mut stdout_lock,
-                &mut registry,
+                Arc::clone(&registry),
                 &config,
                 true,
                 Some(&base_dir),
@@ -979,7 +971,7 @@ fn main() {
             if let Err(err) = run_server(
                 &mut req_reader,
                 &mut resp_writer,
-                &mut registry,
+                Arc::clone(&registry),
                 &config,
                 false,
                 Some(&base_dir),
