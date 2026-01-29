@@ -17,9 +17,9 @@
 
 ## 2) Server IPC
 - [x] Define a simple request/response format (line-delimited or length-prefixed).
-- [ ] Implement per-buffer FIFO creation (similar to `kak-tree-sitter`).
+- [x] Implement per-buffer FIFO creation (similar to `kak-tree-sitter`).
 - [x] Implement server loop to read buffer snapshots and dispatch highlight jobs.
-- [ ] Implement session init handshake: return FIFO path + sentinel to Kakoune.
+- [x] Implement session init handshake: return FIFO path + sentinel to Kakoune.
 - [x] Wire a global FIFO server from Kakoune (start/stop + request/response).
 
 ## 3) Highlight pipeline

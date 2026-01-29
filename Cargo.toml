@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 # Local development dependency; adjust to a crates.io version when published.
 giallo = { path = "../giallo", features = ["dump"] }
+libc = "0.2"

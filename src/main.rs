@@ -1,7 +1,9 @@
 use std::collections::HashMap;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
+use std::path::{Path, PathBuf};
 use std::process;
+use std::thread;
 
 use giallo::{HighlightOptions, Registry, ThemeVariant, PLAIN_GRAMMAR_NAME};
 
@@ -212,11 +214,49 @@ fn parse_args() -> Mode {
     }
 }
 
+fn token_hash(token: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    token.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
+}
+
+fn create_fifo(path: &Path) -> io::Result<()> {
+    let c_path = std::ffi::CString::new(path.as_os_str().to_string_lossy().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid fifo path"))?;
+    let ret = unsafe { libc::mkfifo(c_path.as_ptr(), 0o644) };
+    if ret != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn handle_init(
+    token: &str,
+    base_dir: &Path,
+) -> io::Result<(PathBuf, PathBuf, String)> {
+    fs::create_dir_all(base_dir)?;
+    let hash = token_hash(token);
+    let req = base_dir.join(format!("{hash}.req.fifo"));
+    let resp = base_dir.join(format!("{hash}.resp.fifo"));
+    let sentinel = format!("giallo-{hash}");
+
+    if !req.exists() {
+        create_fifo(&req)?;
+    }
+    if !resp.exists() {
+        create_fifo(&resp)?;
+    }
+
+    Ok((req, resp, sentinel))
+}
+
 fn run_server<R: BufRead, W: Write>(
     mut reader: R,
     mut writer: W,
     registry: &mut Registry,
     oneshot: bool,
+    base_dir: Option<&Path>,
 ) -> io::Result<()> {
     let mut line = String::new();
     loop {
@@ -239,6 +279,83 @@ fn run_server<R: BufRead, W: Write>(
 
         let mut parts = line.split_whitespace();
         let cmd = parts.next().unwrap_or("");
+
+        if cmd == "INIT" {
+            let token = match parts.next() {
+                Some(v) => v.to_string(),
+                None => {
+                    eprintln!("missing token");
+                    continue;
+                }
+            };
+            let Some(base_dir) = base_dir else {
+                eprintln!("init not supported in this mode");
+                continue;
+            };
+
+            let (req, resp, sentinel) = match handle_init(&token, base_dir) {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("init error: {err}");
+                    continue;
+                }
+            };
+
+            let commands = format!(
+                "set-option buffer giallo_buf_fifo_path {req}\nset-option buffer giallo_buf_resp_path {resp}\nset-option buffer giallo_buf_sentinel {sentinel}\n",
+                req = req.display(),
+                resp = resp.display(),
+                sentinel = sentinel
+            );
+
+            let req_path = req.clone();
+            let resp_path = resp.clone();
+            let token_clone = token.clone();
+            thread::spawn(move || {
+                let mut registry = match Registry::builtin() {
+                    Ok(registry) => registry,
+                    Err(err) => {
+                        eprintln!("init thread registry error ({token_clone}): {err}");
+                        return;
+                    }
+                };
+                registry.link_grammars();
+
+                let req_file = match OpenOptions::new().read(true).open(&req_path) {
+                    Ok(file) => file,
+                    Err(err) => {
+                        eprintln!("init thread open req error ({token_clone}): {err}");
+                        return;
+                    }
+                };
+                let resp_file = match OpenOptions::new().write(true).open(&resp_path) {
+                    Ok(file) => file,
+                    Err(err) => {
+                        eprintln!("init thread open resp error ({token_clone}): {err}");
+                        return;
+                    }
+                };
+
+                let mut req_reader = io::BufReader::new(req_file);
+                let mut resp_writer = resp_file;
+                let _ = run_server(
+                    &mut req_reader,
+                    &mut resp_writer,
+                    &mut registry,
+                    false,
+                    None,
+                );
+            });
+
+            if oneshot {
+                writer.write_all(commands.as_bytes())?;
+                writer.flush()?;
+                break;
+            } else {
+                write_response(&mut writer, &commands)?;
+            }
+            continue;
+        }
 
         if cmd != "H" {
             eprintln!("unknown command: {cmd}");
@@ -321,6 +438,7 @@ fn run_server<R: BufRead, W: Write>(
 
 fn main() {
     let mode = parse_args();
+    let base_dir = std::env::temp_dir().join(format!("giallo-kak-{}", process::id()));
 
     let mut registry = match Registry::builtin() {
         Ok(registry) => registry,
@@ -337,7 +455,13 @@ fn main() {
             let stdout = io::stdout();
             let mut stdin_lock = stdin.lock();
             let mut stdout_lock = stdout.lock();
-            if let Err(err) = run_server(&mut stdin_lock, &mut stdout_lock, &mut registry, false) {
+            if let Err(err) = run_server(
+                &mut stdin_lock,
+                &mut stdout_lock,
+                &mut registry,
+                false,
+                Some(&base_dir),
+            ) {
                 eprintln!("server error: {err}");
             }
         }
@@ -346,7 +470,13 @@ fn main() {
             let stdout = io::stdout();
             let mut stdin_lock = stdin.lock();
             let mut stdout_lock = stdout.lock();
-            if let Err(err) = run_server(&mut stdin_lock, &mut stdout_lock, &mut registry, true) {
+            if let Err(err) = run_server(
+                &mut stdin_lock,
+                &mut stdout_lock,
+                &mut registry,
+                true,
+                Some(&base_dir),
+            ) {
                 eprintln!("oneshot error: {err}");
             }
         }
@@ -373,7 +503,9 @@ fn main() {
                 Box::new(io::stdout())
             };
 
-            if let Err(err) = run_server(&mut req_reader, &mut resp_writer, &mut registry, false) {
+            if let Err(err) =
+                run_server(&mut req_reader, &mut resp_writer, &mut registry, false, Some(&base_dir))
+            {
                 eprintln!("fifo server error: {err}");
             }
         }

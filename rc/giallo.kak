@@ -6,6 +6,7 @@ declare-option -hidden str giallo_lang
 declare-option -hidden str giallo_theme
 declare-option -hidden str giallo_hl_ranges
 declare-option -hidden str giallo_buf_fifo_path
+declare-option -hidden str giallo_buf_resp_path
 declare-option -hidden str giallo_buf_sentinel
 declare-option -hidden bool giallo_enabled false
 declare-option -hidden str giallo_server_req
@@ -58,6 +59,7 @@ define-command -docstring "Enable giallo highlighting for the current buffer" gi
     set-option buffer giallo_enabled true
     add-highlighter -override buffer/giallo ranges giallo_hl_ranges
     giallo-start-server
+    giallo-init-buffer
     giallo-rehighlight
 }
 
@@ -66,6 +68,33 @@ define-command -docstring "Disable giallo highlighting for the current buffer" g
     set-option buffer giallo_enabled false
     remove-highlighter buffer/giallo
     set-option buffer giallo_hl_ranges ""
+    set-option buffer giallo_buf_fifo_path ""
+    set-option buffer giallo_buf_resp_path ""
+    set-option buffer giallo_buf_sentinel ""
+}
+
+# Initialize per-buffer FIFO via server handshake.
+define-command -docstring "Initialize per-buffer FIFO for giallo" giallo-init-buffer %{
+    evaluate-commands %sh{
+        if [ -z "$kak_opt_giallo_server_req" ] || [ ! -p "$kak_opt_giallo_server_req" ]; then
+            printf 'giallo-start-server\n'
+        fi
+        if [ -z "$kak_opt_giallo_buf_fifo_path" ] || [ ! -p "$kak_opt_giallo_buf_fifo_path" ]; then
+            printf 'giallo-init-buffer\n'
+        fi
+
+        token="${kak_bufname:-buffer}"
+
+        {
+            printf 'INIT %s\n' "$token"
+        } > "$kak_opt_giallo_server_req"
+
+        IFS= read -r header < "$kak_opt_giallo_server_resp"
+        set -- $header
+        if [ "$1" = "OK" ] && [ -n "$2" ]; then
+            dd bs=1 count="$2" < "$kak_opt_giallo_server_resp" 2>/dev/null
+        fi
+    }
 }
 
 # Force a rehighlight (placeholder)
@@ -92,16 +121,16 @@ define-command -docstring "Rehighlight current buffer using giallo" giallo-rehig
         content="$kak_bufstr"
         len=$(printf %s "$content" | wc -c | tr -d '[:space:]')
 
-        if [ -n "$kak_opt_giallo_server_req" ] && [ -p "$kak_opt_giallo_server_req" ]; then
+        if [ -n "$kak_opt_giallo_buf_fifo_path" ] && [ -p "$kak_opt_giallo_buf_fifo_path" ] && [ -n "$kak_opt_giallo_buf_resp_path" ] && [ -p "$kak_opt_giallo_buf_resp_path" ]; then
             {
                 printf 'H %s %s %s\n' "$lang" "$theme" "$len"
                 printf %s "$content"
-            } > "$kak_opt_giallo_server_req"
+            } > "$kak_opt_giallo_buf_fifo_path"
 
-            IFS= read -r header < "$kak_opt_giallo_server_resp"
+            IFS= read -r header < "$kak_opt_giallo_buf_resp_path"
             set -- $header
             if [ "$1" = "OK" ] && [ -n "$2" ]; then
-                dd bs=1 count="$2" < "$kak_opt_giallo_server_resp" 2>/dev/null
+                dd bs=1 count="$2" < "$kak_opt_giallo_buf_resp_path" 2>/dev/null
             fi
         else
             {
