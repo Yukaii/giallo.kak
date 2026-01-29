@@ -106,6 +106,57 @@ jobs:
             giallo-kak/giallo-kak-${{ matrix.target }}.*
           if-no-files-found: error
 
+  # Create prerelease on main branch push
+  prerelease:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout giallo.kak
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: giallo-kak-*
+
+      - name: Get short SHA
+        id: sha
+        run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Delete old prerelease
+        uses: dev-drprasad/delete-older-releases@v0.3.2
+        with:
+          keep_latest: 0
+          delete_tag_pattern: prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Create Prerelease
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: prerelease
+          name: Prerelease (${{ steps.sha.outputs.sha }})
+          body: |
+            This is a prerelease build from the latest commit on the main branch.
+            
+            Commit: ${{ steps.sha.outputs.sha }}
+            
+            These binaries are automatically built and may contain unstable features.
+            For stable releases, please see the [releases page](https://github.com/Yukaii/giallo.kak/releases).
+          files: |
+            artifacts/giallo-kak-*/giallo-kak-*.tar.gz
+            artifacts/giallo-kak-*/giallo-kak-*.zip
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # Create release for tags
   release:
     needs: build
