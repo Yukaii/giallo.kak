@@ -6,6 +6,7 @@ use std::process;
 use std::thread;
 
 use giallo::{HighlightOptions, Registry, ThemeVariant, PLAIN_GRAMMAR_NAME};
+use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct StyleKey {
@@ -221,6 +222,56 @@ fn token_hash(token: &str) -> String {
     format!("{:x}", hasher.finish())
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+struct Config {
+    theme: Option<String>,
+    #[serde(default)]
+    language_map: HashMap<String, String>,
+}
+
+impl Config {
+    fn load() -> Self {
+        let path = config_path();
+        let Ok(contents) = fs::read_to_string(&path) else {
+            return Self::default();
+        };
+        match toml::from_str::<Config>(&contents) {
+            Ok(config) => config,
+            Err(err) => {
+                eprintln!("config parse error ({}): {err}", path.display());
+                Self::default()
+            }
+        }
+    }
+
+    fn resolve_lang(&self, lang: &str) -> String {
+        self.language_map
+            .get(lang)
+            .cloned()
+            .unwrap_or_else(|| lang.to_string())
+    }
+
+    fn resolve_theme<'a>(&'a self, theme: &'a str) -> &'a str {
+        if theme.is_empty() {
+            self.theme.as_deref().unwrap_or(DEFAULT_THEME)
+        } else {
+            theme
+        }
+    }
+}
+
+const DEFAULT_THEME: &str = "catppuccin-frappe";
+
+fn config_path() -> PathBuf {
+    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
+        PathBuf::from(dir).join("giallo.kak/config.toml")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".config/giallo.kak/config.toml")
+    } else {
+        PathBuf::from("giallo.kak.toml")
+    }
+}
+
 fn create_fifo(path: &Path) -> io::Result<()> {
     let c_path = std::ffi::CString::new(path.as_os_str().to_string_lossy().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid fifo path"))?;
@@ -255,6 +306,7 @@ fn run_server<R: BufRead, W: Write>(
     mut reader: R,
     mut writer: W,
     registry: &mut Registry,
+    config: &Config,
     oneshot: bool,
     base_dir: Option<&Path>,
 ) -> io::Result<()> {
@@ -311,44 +363,46 @@ fn run_server<R: BufRead, W: Write>(
             let req_path = req.clone();
             let resp_path = resp.clone();
             let token_clone = token.clone();
-    thread::spawn(move || {
-        let mut registry = match Registry::builtin() {
-            Ok(registry) => registry,
-            Err(err) => {
-                eprintln!("init thread registry error ({token_clone}): {err}");
-                return;
-            }
-        };
-        registry.link_grammars();
+            let config_clone = config.clone();
+            thread::spawn(move || {
+                let mut registry = match Registry::builtin() {
+                    Ok(registry) => registry,
+                    Err(err) => {
+                        eprintln!("init thread registry error ({token_clone}): {err}");
+                        return;
+                    }
+                };
+                registry.link_grammars();
 
-        let req_file = match OpenOptions::new().read(true).open(&req_path) {
-            Ok(file) => file,
-            Err(err) => {
-                eprintln!("init thread open req error ({token_clone}): {err}");
-                return;
-            }
-        };
-        let resp_file = match OpenOptions::new().write(true).open(&resp_path) {
-            Ok(file) => file,
-            Err(err) => {
-                eprintln!("init thread open resp error ({token_clone}): {err}");
-                return;
-            }
-        };
+                let req_file = match OpenOptions::new().read(true).open(&req_path) {
+                    Ok(file) => file,
+                    Err(err) => {
+                        eprintln!("init thread open req error ({token_clone}): {err}");
+                        return;
+                    }
+                };
+                let resp_file = match OpenOptions::new().write(true).open(&resp_path) {
+                    Ok(file) => file,
+                    Err(err) => {
+                        eprintln!("init thread open resp error ({token_clone}): {err}");
+                        return;
+                    }
+                };
 
-        let mut req_reader = io::BufReader::new(req_file);
-        let mut resp_writer = resp_file;
-        let _ = run_server(
-            &mut req_reader,
-            &mut resp_writer,
-            &mut registry,
-            false,
-            None,
-        );
+                let mut req_reader = io::BufReader::new(req_file);
+                let mut resp_writer = resp_file;
+                let _ = run_server(
+                    &mut req_reader,
+                    &mut resp_writer,
+                    &mut registry,
+                    &config_clone,
+                    false,
+                    None,
+                );
 
-        let _ = fs::remove_file(&req_path);
-        let _ = fs::remove_file(&resp_path);
-    });
+                let _ = fs::remove_file(&req_path);
+                let _ = fs::remove_file(&resp_path);
+            });
 
             if oneshot {
                 writer.write_all(commands.as_bytes())?;
@@ -408,12 +462,15 @@ fn run_server<R: BufRead, W: Write>(
             }
         };
 
-        let options = HighlightOptions::new(&lang, ThemeVariant::Single(theme.as_str()));
+        let resolved_lang = config.resolve_lang(&lang);
+        let resolved_theme = config.resolve_theme(theme.as_str());
+
+        let options = HighlightOptions::new(&resolved_lang, ThemeVariant::Single(resolved_theme));
         let highlighted = match registry.highlight(&text, &options) {
             Ok(h) => h,
             Err(_) => {
                 let fallback =
-                    HighlightOptions::new(PLAIN_GRAMMAR_NAME, ThemeVariant::Single(theme.as_str()));
+                    HighlightOptions::new(PLAIN_GRAMMAR_NAME, ThemeVariant::Single(resolved_theme));
                 match registry.highlight(&text, &fallback) {
                     Ok(h) => h,
                     Err(err) => {
@@ -451,6 +508,7 @@ fn main() {
         }
     };
     registry.link_grammars();
+    let config = Config::load();
 
     match mode {
         Mode::Stdio => {
@@ -462,6 +520,7 @@ fn main() {
                 &mut stdin_lock,
                 &mut stdout_lock,
                 &mut registry,
+                &config,
                 false,
                 Some(&base_dir),
             ) {
@@ -477,6 +536,7 @@ fn main() {
                 &mut stdin_lock,
                 &mut stdout_lock,
                 &mut registry,
+                &config,
                 true,
                 Some(&base_dir),
             ) {
@@ -506,8 +566,14 @@ fn main() {
                 Box::new(io::stdout())
             };
 
-            if let Err(err) =
-                run_server(&mut req_reader, &mut resp_writer, &mut registry, false, Some(&base_dir))
+            if let Err(err) = run_server(
+                &mut req_reader,
+                &mut resp_writer,
+                &mut registry,
+                &config,
+                false,
+                Some(&base_dir),
+            )
             {
                 eprintln!("fifo server error: {err}");
             }

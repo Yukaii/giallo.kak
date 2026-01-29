@@ -35,12 +35,12 @@
 - [ ] Ignore alpha (Kakoune doesn’t support it).
 
 ## 5) Config
-- [ ] Define config file path and schema (`~/.config/giallo.kak/config.toml`).
-- [ ] Implement theme/lang map overrides.
-- [ ] Add default theme fallback and unknown-language fallback.
+- [x] Define config file path and schema (`~/.config/giallo.kak/config.toml`).
+- [x] Implement theme/lang map overrides.
+- [x] Add default theme fallback and unknown-language fallback.
 
 ## 6) Performance & safety
-- [ ] Debounce updates (50–100ms).
+- [x] Debounce updates (50–100ms).
 - [ ] Add max buffer size guard.
 - [ ] Cache compiled themes / face sets.
 - [ ] Add logging and error handling.

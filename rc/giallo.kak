@@ -9,6 +9,8 @@ declare-option -hidden str giallo_buf_fifo_path
 declare-option -hidden str giallo_buf_resp_path
 declare-option -hidden str giallo_buf_sentinel
 declare-option -hidden bool giallo_enabled false
+declare-option -hidden bool giallo_busy false
+declare-option -hidden str giallo_last_ms
 declare-option -hidden str giallo_server_req
 declare-option -hidden str giallo_server_resp
 declare-option -hidden str giallo_server_pid
@@ -71,6 +73,8 @@ define-command -docstring "Disable giallo highlighting for the current buffer" g
     set-option buffer giallo_buf_fifo_path ""
     set-option buffer giallo_buf_resp_path ""
     set-option buffer giallo_buf_sentinel ""
+    set-option buffer giallo_busy false
+    set-option buffer giallo_last_ms ""
 }
 
 # Initialize per-buffer FIFO via server handshake.
@@ -103,9 +107,26 @@ define-command -docstring "Rehighlight current buffer using giallo" giallo-rehig
         if [ "$kak_opt_giallo_enabled" != "true" ]; then
             exit 0
         fi
+        if [ "$kak_opt_giallo_busy" = "true" ]; then
+            exit 0
+        fi
+
+        now_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+        if [ -n "$kak_opt_giallo_last_ms" ]; then
+            delta=$((now_ms - kak_opt_giallo_last_ms))
+            if [ "$delta" -lt 80 ]; then
+                exit 0
+            fi
+        fi
+
+        printf 'set-option buffer giallo_busy true\n'
+        printf 'set-option buffer giallo_last_ms %s\n' "$now_ms"
 
         if [ -z "$kak_opt_giallo_server_req" ] || [ ! -p "$kak_opt_giallo_server_req" ]; then
             printf 'giallo-start-server\n'
+        fi
+        if [ -z "$kak_opt_giallo_buf_fifo_path" ] || [ ! -p "$kak_opt_giallo_buf_fifo_path" ]; then
+            printf 'giallo-init-buffer\n'
         fi
 
         lang="$kak_opt_giallo_lang"
@@ -113,9 +134,6 @@ define-command -docstring "Rehighlight current buffer using giallo" giallo-rehig
 
         if [ -z "$lang" ]; then
             lang="$kak_opt_filetype"
-        fi
-        if [ -z "$theme" ]; then
-            theme="catppuccin-frappe"
         fi
 
         content="$kak_bufstr"
@@ -138,6 +156,8 @@ define-command -docstring "Rehighlight current buffer using giallo" giallo-rehig
                 printf %s "$content"
             } | giallo-kak --oneshot
         fi
+
+        printf 'set-option buffer giallo_busy false\n'
     }
 }
 
