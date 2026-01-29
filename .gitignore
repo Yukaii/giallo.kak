@@ -1,0 +1,7 @@
+/target/
+.DS_Store
+*.fifo
+*.pid
+
+# local config
+config.toml
