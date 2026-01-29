@@ -6,19 +6,19 @@
 - [ ] Add `docs/` for user setup and configuration.
 
 ## 1) Kakoune script (MVP)
-- [ ] Define buffer options: `giallo_lang`, `giallo_theme`, `giallo_hl_ranges`, `giallo_buf_fifo_path`, `giallo_buf_sentinel`.
-- [ ] Add `ranges` highlighter: `add-highlighter -override buffer/giallo ranges giallo_hl_ranges`.
-- [ ] Add hooks for buffer setup and updates (BufOpen/BufReload/InsertChar/NormalIdle).
-- [ ] Add filetype-to-language mapping hook (`BufSetOption filetype`).
-- [ ] Add commands:
+- [x] Define buffer options: `giallo_lang`, `giallo_theme`, `giallo_hl_ranges`, `giallo_buf_fifo_path`, `giallo_buf_sentinel`.
+- [x] Add `ranges` highlighter: `add-highlighter -override buffer/giallo ranges giallo_hl_ranges`.
+- [x] Add hooks for buffer setup and updates (BufOpen/BufReload/InsertChar/NormalIdle).
+- [x] Add filetype-to-language mapping hook (`BufSetOption filetype`).
+- [x] Add commands:
   - `giallo-enable` / `giallo-disable` (per buffer)
   - `giallo-rehighlight`
   - `giallo-set-theme <name>`
 
 ## 2) Server IPC
-- [ ] Define a simple request/response format (line-delimited or length-prefixed).
+- [x] Define a simple request/response format (line-delimited or length-prefixed).
 - [ ] Implement per-buffer FIFO creation (similar to `kak-tree-sitter`).
-- [ ] Implement server loop to read buffer snapshots and dispatch highlight jobs.
+- [x] Implement server loop to read buffer snapshots and dispatch highlight jobs.
 - [ ] Implement session init handshake: return FIFO path + sentinel to Kakoune.
 
 ## 3) Highlight pipeline

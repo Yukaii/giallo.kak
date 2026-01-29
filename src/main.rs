@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::io::{self, BufRead, Read, Write};
 use std::process;
 
@@ -167,44 +168,60 @@ fn read_exact_bytes(reader: &mut impl Read, len: usize) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn main() {
+enum Mode {
+    Stdio,
+    Oneshoot,
+    Fifo { req: String, resp: Option<String> },
+}
+
+fn parse_args() -> Mode {
     let mut oneshot = false;
-    for arg in std::env::args().skip(1) {
-        if arg == "--version" {
-            println!("giallo-kak 0.1.0");
-            return;
-        }
-        if arg == "--oneshot" {
-            oneshot = true;
+    let mut fifo_req: Option<String> = None;
+    let mut fifo_resp: Option<String> = None;
+
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--version" => {
+                println!("giallo-kak 0.1.0");
+                process::exit(0);
+            }
+            "--oneshot" => oneshot = true,
+            "--fifo" => {
+                if let Some(path) = args.next() {
+                    fifo_req = Some(path);
+                }
+            }
+            "--resp" => {
+                if let Some(path) = args.next() {
+                    fifo_resp = Some(path);
+                }
+            }
+            _ => {}
         }
     }
 
-    let mut registry = match Registry::builtin() {
-        Ok(registry) => registry,
-        Err(err) => {
-            eprintln!("failed to load giallo registry: {err}");
-            process::exit(1);
-        }
-    };
-    registry.link_grammars();
+    if let Some(req) = fifo_req {
+        return Mode::Fifo { req, resp: fifo_resp };
+    }
 
-    let stdin = io::stdin();
-    let mut stdin_lock = stdin.lock();
+    if oneshot {
+        Mode::Oneshoot
+    } else {
+        Mode::Stdio
+    }
+}
+
+fn run_server<R: BufRead, W: Write>(
+    mut reader: R,
+    mut writer: W,
+    registry: &mut Registry,
+    oneshot: bool,
+) -> io::Result<()> {
     let mut line = String::new();
-    let stdout = io::stdout();
-    let mut stdout_lock = stdout.lock();
-
     loop {
         line.clear();
-        let bytes = match stdin_lock.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(err) => {
-                eprintln!("read error: {err}");
-                break;
-            }
-        };
-
+        let bytes = reader.read_line(&mut line)?;
         if bytes == 0 {
             break;
         }
@@ -215,8 +232,8 @@ fn main() {
         }
 
         if line == "PING" {
-            writeln!(stdout_lock, "PONG").ok();
-            stdout_lock.flush().ok();
+            writeln!(writer, "PONG").ok();
+            writer.flush().ok();
             continue;
         }
 
@@ -256,7 +273,7 @@ fn main() {
             }
         };
 
-        let buf = match read_exact_bytes(&mut stdin_lock, len) {
+        let buf = match read_exact_bytes(&mut reader, len) {
             Ok(b) => b,
             Err(err) => {
                 eprintln!("failed to read payload: {err}");
@@ -291,15 +308,74 @@ fn main() {
         let commands = build_commands(&faces, &ranges);
 
         if oneshot {
-            if let Err(err) = stdout_lock.write_all(commands.as_bytes()) {
-                eprintln!("failed to write oneshot response: {err}");
-                break;
+            writer.write_all(commands.as_bytes())?;
+            writer.flush()?;
+            break;
+        } else {
+            write_response(&mut writer, &commands)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn main() {
+    let mode = parse_args();
+
+    let mut registry = match Registry::builtin() {
+        Ok(registry) => registry,
+        Err(err) => {
+            eprintln!("failed to load giallo registry: {err}");
+            process::exit(1);
+        }
+    };
+    registry.link_grammars();
+
+    match mode {
+        Mode::Stdio => {
+            let stdin = io::stdin();
+            let stdout = io::stdout();
+            let mut stdin_lock = stdin.lock();
+            let mut stdout_lock = stdout.lock();
+            if let Err(err) = run_server(&mut stdin_lock, &mut stdout_lock, &mut registry, false) {
+                eprintln!("server error: {err}");
             }
-            stdout_lock.flush().ok();
-            break;
-        } else if let Err(err) = write_response(&mut stdout_lock, &commands) {
-            eprintln!("failed to write response: {err}");
-            break;
+        }
+        Mode::Oneshoot => {
+            let stdin = io::stdin();
+            let stdout = io::stdout();
+            let mut stdin_lock = stdin.lock();
+            let mut stdout_lock = stdout.lock();
+            if let Err(err) = run_server(&mut stdin_lock, &mut stdout_lock, &mut registry, true) {
+                eprintln!("oneshot error: {err}");
+            }
+        }
+        Mode::Fifo { req, resp } => {
+            let req_file = match OpenOptions::new().read(true).open(&req) {
+                Ok(file) => file,
+                Err(err) => {
+                    eprintln!("failed to open fifo for read: {req}: {err}");
+                    process::exit(1);
+                }
+            };
+
+            let mut req_reader = io::BufReader::new(req_file);
+
+            let mut resp_writer: Box<dyn Write> = if let Some(resp_path) = resp {
+                match OpenOptions::new().write(true).open(&resp_path) {
+                    Ok(file) => Box::new(file),
+                    Err(err) => {
+                        eprintln!("failed to open fifo for write: {resp_path}: {err}");
+                        process::exit(1);
+                    }
+                }
+            } else {
+                Box::new(io::stdout())
+            };
+
+            if let Err(err) = run_server(&mut req_reader, &mut resp_writer, &mut registry, false) {
+                eprintln!("fifo server error: {err}");
+            }
         }
     }
 }

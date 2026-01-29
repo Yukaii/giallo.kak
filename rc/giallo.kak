@@ -57,5 +57,20 @@ define-command -params 1 -docstring "Set giallo theme for current buffer" giallo
     giallo-rehighlight
 }
 
+# Auto set giallo_lang from filetype unless explicitly set.
+hook -group giallo global BufSetOption filetype=.* %{
+    evaluate-commands %sh{
+        if [ -z "$kak_opt_giallo_lang" ]; then
+            printf 'set-option buffer giallo_lang %s\n' "$kak_opt_filetype"
+        fi
+    }
+}
+
 # Auto refresh on idle edits; uses giallo_enabled guard inside giallo-rehighlight.
 hook -group giallo global NormalIdle .* %{ giallo-rehighlight }
+
+# Also refresh on major buffer lifecycle events.
+hook -group giallo global BufOpen .* %{ giallo-rehighlight }
+hook -group giallo global BufReload .* %{ giallo-rehighlight }
+hook -group giallo global BufWritePost .* %{ giallo-rehighlight }
+hook -group giallo global InsertChar .* %{ giallo-rehighlight }
