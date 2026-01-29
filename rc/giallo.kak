@@ -107,6 +107,13 @@ define-command -docstring "Enable giallo highlighting for the current buffer" gi
     giallo-remove-default-highlighter
     try %{ remove-highlighter buffer/giallo }
     add-highlighter -override buffer/giallo ranges giallo_hl_ranges
+    hook -once buffer BufSetOption giallo_buf_fifo_path=.* %{ 
+        evaluate-commands %sh{
+            if [ "$kak_opt_giallo_enabled" = "true" ] && [ -z "$kak_opt_giallo_hl_ranges" ]; then
+                printf 'giallo-rehighlight\n'
+            fi
+        }
+    }
     giallo-start-server
     giallo-init-buffer
 }
@@ -132,10 +139,11 @@ define-command -docstring "Initialize per-buffer FIFO for giallo" giallo-init-bu
 
         session="$kak_session"
         buffer="$kak_bufname"
+        token="$(uuidgen 2>/dev/null || printf '%s.%s.%s' "$buffer" "$(date +%s)" "$$")"
         log_file="$kak_opt_giallo_server_log"
 
         # Write to FIFO in background to avoid blocking UI if server isn't ready yet.
-        sh -c "printf 'INIT %s %s %s\n' '$session' '$buffer' '$buffer' > '$fifo'" >/dev/null 2>&1 &
+        sh -c "printf 'INIT %s %s %s\n' '$session' '$buffer' '$token' > '$fifo'" >/dev/null 2>&1 &
         if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$log_file" ]; then
             printf 'giallo-init-buffer: session=%s buffer=%s fifo=%s\n' "$session" "$buffer" "$fifo" >>"$log_file"
         fi
@@ -155,12 +163,34 @@ define-command -hidden giallo-buffer-update %{
             fi
             exit 0
         fi
-        
+
         fifo="$kak_opt_giallo_buf_fifo_path"
         sentinel="$kak_opt_giallo_buf_sentinel"
         lang="$kak_opt_giallo_lang"
         theme="$kak_opt_giallo_theme"
         log_file="$kak_opt_giallo_server_log"
+
+        lock_dir="$fifo.lock"
+        if ! mkdir "$lock_dir" 2>/dev/null; then
+            if [ "$kak_opt_giallo_debug" = "true" ]; then
+                echo "giallo-buffer-update: skip inflight update" >&2
+                if [ -n "$log_file" ]; then
+                    printf 'giallo-buffer-update: skip inflight update\n' >>"$log_file"
+                fi
+            fi
+            exit 0
+        fi
+        trap 'rmdir "$lock_dir" >/dev/null 2>&1 || true' EXIT
+
+        if [ -z "$kak_buffile" ] || [ ! -r "$kak_buffile" ]; then
+            if [ "$kak_opt_giallo_debug" = "true" ]; then
+                echo "giallo-buffer-update: skip unreadable buffile=$kak_buffile" >&2
+                if [ -n "$log_file" ]; then
+                    printf 'giallo-buffer-update: skip unreadable buffile=%s\n' "$kak_buffile" >>"$log_file"
+                fi
+            fi
+            exit 0
+        fi
         
         # Debug output - always log to stderr for shell debugging
         if [ "$kak_opt_giallo_debug" = "true" ]; then
@@ -198,9 +228,9 @@ define-command -hidden giallo-buffer-update %{
         
         {
             printf 'H %s %s\n' "$lang" "$theme"
-            cat "$kak_buffile"
+            cat "$kak_buffile" 2>/dev/null
             printf '%s\n' "$sentinel"
-        } > "$fifo" 2>&1
+        } > "$fifo"
         
         result=$?
         if [ "$kak_opt_giallo_debug" = "true" ]; then
