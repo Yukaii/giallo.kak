@@ -104,6 +104,8 @@ dependencies = [
 [[package]]
 name = "giallo"
 version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64ba13360df2c7495bdbd41b74bebcd8dd7f47ccebfbd7c0d5b098187d5ceece"
 dependencies = [
  "flate2",
  "onig-regset",

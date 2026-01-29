@@ -420,7 +420,8 @@ fn parse_args() -> (Mode, bool) {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--version" => {
-                println!("giallo-kak {}", env!("CARGO_PKG_VERSION"));
+                let commit = option_env!("GIT_COMMIT").unwrap_or("unknown");
+                println!("giallo-kak {} ({})", env!("CARGO_PKG_VERSION"), commit);
                 process::exit(0);
             }
             "--verbose" | "-v" => verbose = true,
