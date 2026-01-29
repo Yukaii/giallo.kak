@@ -291,7 +291,11 @@ define-command -docstring "Rehighlight current buffer using giallo" giallo-rehig
             fi
         else
             if [ "$kak_opt_giallo_enabled" = "true" ]; then
-                printf 'giallo-exec-if-changed giallo-buffer-update\n'
+                if [ -n "$kak_opt_giallo_buf_fifo_path" ] && [ -z "$kak_opt_giallo_hl_ranges" ]; then
+                    printf 'giallo-buffer-update\n'
+                else
+                    printf 'giallo-exec-if-changed giallo-buffer-update\n'
+                fi
             fi
         fi
     }
