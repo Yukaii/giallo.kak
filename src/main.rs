@@ -3,10 +3,11 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::thread;
 use std::process::{Command, Stdio};
+use std::thread;
 
 use giallo::{HighlightOptions, Registry, ThemeVariant, PLAIN_GRAMMAR_NAME};
+use log;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -51,6 +52,14 @@ fn style_key(style: &giallo::Style) -> StyleKey {
     }
 }
 
+fn strip_hash(hex: &str) -> &str {
+    if hex.starts_with('#') {
+        &hex[1..]
+    } else {
+        hex
+    }
+}
+
 fn style_to_face_spec(style: &giallo::Style) -> String {
     let mut attrs = String::new();
     if style.font_style.contains(giallo::FontStyle::BOLD) {
@@ -66,19 +75,19 @@ fn style_to_face_spec(style: &giallo::Style) -> String {
         attrs.push('s');
     }
 
-    let fg = normalize_hex(&style.foreground.as_hex());
-    let bg = normalize_hex(&style.background.as_hex());
+    let fg_hex = normalize_hex(&style.foreground.as_hex());
+    let bg_hex = normalize_hex(&style.background.as_hex());
+    let fg = strip_hash(&fg_hex);
+    let bg = strip_hash(&bg_hex);
 
     if attrs.is_empty() {
-        format!("{fg},{bg}")
+        format!("rgb:{fg},rgb:{bg}")
     } else {
-        format!("{fg},{bg}+{attrs}")
+        format!("rgb:{fg},rgb:{bg}+{attrs}")
     }
 }
 
-fn build_kakoune_commands(
-    highlighted: &giallo::HighlightedCode<'_>,
-) -> (Vec<FaceDef>, String) {
+fn build_kakoune_commands(highlighted: &giallo::HighlightedCode<'_>) -> (Vec<FaceDef>, String) {
     let theme = match highlighted.theme {
         ThemeVariant::Single(theme) => theme,
         ThemeVariant::Dual { light, .. } => light,
@@ -131,9 +140,7 @@ fn build_kakoune_commands(
             let col_start = start + 1;
             let col_end = end_excl.max(1);
 
-            ranges.push(format!(
-                "{line}.{col_start},{line}.{col_end}|{face_name}"
-            ));
+            ranges.push(format!("{line}.{col_start},{line}.{col_end}|{face_name}"));
         }
     }
 
@@ -149,11 +156,12 @@ fn build_kakoune_commands(
 fn build_commands(faces: &[FaceDef], ranges: &str) -> String {
     let mut commands = String::new();
     for face in faces {
+        // Quote the face spec to handle # characters in hex colors
         commands.push_str("set-face global ");
         commands.push_str(&face.name);
-        commands.push(' ');
+        commands.push_str(" %{");
         commands.push_str(&face.spec);
-        commands.push('\n');
+        commands.push_str("}\n");
     }
 
     commands.push_str("set-option buffer giallo_hl_ranges %val{timestamp}");
@@ -191,6 +199,39 @@ fn send_to_kak(session: &str, buffer: &str, payload: &str) -> io::Result<()> {
     cmd.push_str(payload);
     cmd.push_str(" ]\n");
 
+    log::trace!(
+        "send_to_kak: sending {} bytes to kak -p {}",
+        cmd.len(),
+        session
+    );
+
+    // Log the full payload for debugging
+    let preview_len = cmd.len().min(500);
+    log::trace!("send_to_kak: command: {}", &cmd[..preview_len]);
+
+    // Write commands to debug file if GIALLO_DEBUG_FILE env var is set
+    if let Ok(debug_file) = std::env::var("GIALLO_DEBUG_FILE") {
+        let debug_path = std::path::Path::new(&debug_file);
+        let debug_dir = debug_path.parent().unwrap_or(std::path::Path::new("."));
+        if let Err(e) = std::fs::create_dir_all(debug_dir) {
+            log::warn!("Failed to create debug directory: {}", e);
+        }
+        if let Err(e) = std::fs::write(debug_path, &cmd) {
+            log::warn!("Failed to write debug file: {}", e);
+        } else {
+            log::debug!("Wrote commands to debug file: {}", debug_file);
+        }
+    }
+
+    // Check if kak is available
+    if which::which("kak").is_err() {
+        log::error!("send_to_kak: kak command not found in PATH");
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "kak command not found",
+        ));
+    }
+
     let mut child = Command::new("kak")
         .arg("-p")
         .arg(session)
@@ -200,7 +241,10 @@ fn send_to_kak(session: &str, buffer: &str, payload: &str) -> io::Result<()> {
     if let Some(stdin) = child.stdin.as_mut() {
         stdin.write_all(cmd.as_bytes())?;
     }
-    let _ = child.wait()?;
+    let status = child.wait()?;
+    if !status.success() {
+        log::warn!("send_to_kak: kak -p returned exit code {:?}", status.code());
+    }
     Ok(())
 }
 
@@ -215,15 +259,37 @@ fn highlight_and_send(
     let resolved_lang = config.resolve_lang(lang);
     let resolved_theme = config.resolve_theme(theme);
 
+    log::debug!(
+        "highlight: buffer={} lang={} (resolved={}) theme={} (resolved={}) text_len={}",
+        ctx.buffer,
+        lang,
+        resolved_lang,
+        theme,
+        resolved_theme,
+        text.len()
+    );
+
     let options = HighlightOptions::new(&resolved_lang, ThemeVariant::Single(resolved_theme));
     let highlighted = match registry.highlight(text, &options) {
-        Ok(h) => h,
-        Err(_) => {
+        Ok(h) => {
+            log::debug!("highlight: success for {} tokens", h.tokens.len());
+            h
+        }
+        Err(err) => {
+            log::warn!(
+                "highlight: failed with lang={}, trying plain: {}",
+                resolved_lang,
+                err
+            );
             let fallback =
                 HighlightOptions::new(PLAIN_GRAMMAR_NAME, ThemeVariant::Single(resolved_theme));
             match registry.highlight(text, &fallback) {
-                Ok(h) => h,
+                Ok(h) => {
+                    log::debug!("highlight: fallback success for {} tokens", h.tokens.len());
+                    h
+                }
                 Err(err) => {
+                    log::error!("highlight: fallback also failed: {}", err);
                     eprintln!("highlight error: {err}");
                     return;
                 }
@@ -232,9 +298,24 @@ fn highlight_and_send(
     };
 
     let (faces, ranges) = build_kakoune_commands(&highlighted);
+    log::debug!(
+        "highlight: built {} faces and {} ranges",
+        faces.len(),
+        if ranges.is_empty() {
+            0
+        } else {
+            ranges.split_whitespace().count()
+        }
+    );
+
     let commands = build_commands(&faces, &ranges);
+    log::trace!("highlight: sending commands:\n{}", commands);
+
     if let Err(err) = send_to_kak(&ctx.session, &ctx.buffer, &commands) {
+        log::error!("highlight: failed to send to kak: {}", err);
         eprintln!("failed to send highlights to kak: {err}");
+    } else {
+        log::debug!("highlight: sent highlights to kak successfully");
     }
 }
 
@@ -249,17 +330,38 @@ fn run_buffer_fifo<R: BufRead>(
     let mut current_lang = String::new();
     let mut current_theme = String::new();
 
+    log::debug!(
+        "buffer FIFO: starting for buffer={} sentinel={}",
+        ctx.buffer,
+        ctx.sentinel
+    );
+
     loop {
         line.clear();
         let bytes = reader.read_line(&mut line)?;
         if bytes == 0 {
+            log::debug!("buffer FIFO: EOF reached for buffer={}", ctx.buffer);
             break;
         }
 
         let trimmed = line.trim_end_matches(['\n', '\r']);
+
+        log::trace!("buffer FIFO: received line: {:?}", trimmed);
+
         if trimmed == ctx.sentinel {
+            log::debug!(
+                "buffer FIFO: got sentinel, processing buffer (lang={} theme={} len={})",
+                current_lang,
+                current_theme,
+                buf.len()
+            );
             if !current_lang.is_empty() {
                 highlight_and_send(&buf, &current_lang, &current_theme, registry, config, &ctx);
+            } else {
+                log::warn!(
+                    "buffer FIFO: empty language, skipping highlight for buffer={}",
+                    ctx.buffer
+                );
             }
             buf.clear();
             current_lang.clear();
@@ -272,6 +374,11 @@ fn run_buffer_fifo<R: BufRead>(
             let _ = parts.next();
             current_lang = parts.next().unwrap_or("").to_string();
             current_theme = parts.next().unwrap_or("").to_string();
+            log::debug!(
+                "buffer FIFO: got header lang={} theme={}",
+                current_lang,
+                current_theme
+            );
             buf.clear();
             continue;
         }
@@ -279,6 +386,7 @@ fn run_buffer_fifo<R: BufRead>(
         buf.push_str(&line);
     }
 
+    log::debug!("buffer FIFO: exiting for buffer={}", ctx.buffer);
     Ok(())
 }
 
@@ -289,11 +397,12 @@ enum Mode {
     KakouneRc,
 }
 
-fn parse_args() -> Mode {
+fn parse_args() -> (Mode, bool) {
     let mut oneshot = false;
     let mut fifo_req: Option<String> = None;
     let mut fifo_resp: Option<String> = None;
     let mut kakoune_rc = false;
+    let mut verbose = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -302,6 +411,7 @@ fn parse_args() -> Mode {
                 println!("giallo-kak 0.1.0");
                 process::exit(0);
             }
+            "--verbose" | "-v" => verbose = true,
             "--oneshot" => oneshot = true,
             "--kakoune" | "--print-rc" => kakoune_rc = true,
             "--fifo" => {
@@ -318,19 +428,20 @@ fn parse_args() -> Mode {
         }
     }
 
-    if let Some(req) = fifo_req {
-        return Mode::Fifo { req, resp: fifo_resp };
-    }
-
-    if kakoune_rc {
-        return Mode::KakouneRc;
-    }
-
-    if oneshot {
+    let mode = if let Some(req) = fifo_req {
+        Mode::Fifo {
+            req,
+            resp: fifo_resp,
+        }
+    } else if kakoune_rc {
+        Mode::KakouneRc
+    } else if oneshot {
         Mode::Oneshoot
     } else {
         Mode::Stdio
-    }
+    };
+
+    (mode, verbose)
 }
 
 fn token_hash(token: &str) -> String {
@@ -435,7 +546,10 @@ fn run_server<R: BufRead, W: Write>(
             continue;
         }
 
+        log::trace!("received: {}", line);
+
         if line == "PING" {
+            log::trace!("responding with PONG");
             writeln!(writer, "PONG").ok();
             writer.flush().ok();
             continue;
@@ -448,6 +562,7 @@ fn run_server<R: BufRead, W: Write>(
             let session = match parts.next() {
                 Some(v) => v.to_string(),
                 None => {
+                    log::error!("INIT: missing session");
                     eprintln!("missing session");
                     continue;
                 }
@@ -455,6 +570,7 @@ fn run_server<R: BufRead, W: Write>(
             let buffer = match parts.next() {
                 Some(v) => v.to_string(),
                 None => {
+                    log::error!("INIT: missing buffer");
                     eprintln!("missing buffer");
                     continue;
                 }
@@ -462,11 +578,20 @@ fn run_server<R: BufRead, W: Write>(
             let token = match parts.next() {
                 Some(v) => v.to_string(),
                 None => {
+                    log::error!("INIT: missing token");
                     eprintln!("missing token");
                     continue;
                 }
             };
+            log::debug!(
+                "INIT: session={} buffer={} token={}",
+                session,
+                buffer,
+                token
+            );
+
             let Some(base_dir) = base_dir else {
+                log::error!("INIT: init not supported in this mode");
                 eprintln!("init not supported in this mode");
                 continue;
             };
@@ -474,10 +599,16 @@ fn run_server<R: BufRead, W: Write>(
             let (req, sentinel) = match handle_init(&token, base_dir) {
                 Ok(v) => v,
                 Err(err) => {
+                    log::error!("INIT: error creating FIFO: {}", err);
                     eprintln!("init error: {err}");
                     continue;
                 }
             };
+            log::debug!(
+                "INIT: created buffer FIFO at {} with sentinel {}",
+                req.display(),
+                sentinel
+            );
 
             let commands = format!(
                 "set-option buffer giallo_buf_fifo_path {req}\nset-option buffer giallo_buf_sentinel {sentinel}\n",
@@ -496,28 +627,45 @@ fn run_server<R: BufRead, W: Write>(
             let req_file = match OpenOptions::new().read(true).write(true).open(&req_path) {
                 Ok(file) => file,
                 Err(err) => {
+                    log::error!(
+                        "INIT: failed to open buffer FIFO ({}): {}",
+                        token_clone,
+                        err
+                    );
                     eprintln!("init thread open req error ({token_clone}): {err}");
                     continue;
                 }
             };
+            log::debug!("INIT: spawning buffer handler thread");
             thread::spawn(move || {
+                log::debug!("buffer thread: starting for {}", token_clone);
                 let mut registry = match Registry::builtin() {
                     Ok(registry) => registry,
                     Err(err) => {
+                        log::error!(
+                            "buffer thread: failed to load registry ({}): {}",
+                            token_clone,
+                            err
+                        );
                         eprintln!("init thread registry error ({token_clone}): {err}");
                         return;
                     }
                 };
                 registry.link_grammars();
+                log::debug!("buffer thread: registry ready for {}", token_clone);
 
                 let mut req_reader = io::BufReader::new(req_file);
                 let _ = run_buffer_fifo(&mut req_reader, &mut registry, &config_clone, ctx);
 
                 let _ = fs::remove_file(&req_path);
+                log::debug!("buffer thread: exiting for {}", token_clone);
             });
 
             if let Err(err) = send_to_kak(&session, &buffer, &commands) {
+                log::error!("INIT: failed to send init to kak: {}", err);
                 eprintln!("failed to send init to kak: {err}");
+            } else {
+                log::debug!("INIT: sent buffer options to kak");
             }
             continue;
         }
@@ -609,7 +757,7 @@ fn run_server<R: BufRead, W: Write>(
 }
 
 fn main() {
-    let mode = parse_args();
+    let (mode, verbose) = parse_args();
     let base_dir = std::env::temp_dir().join(format!("giallo-kak-{}", process::id()));
 
     if let Mode::KakouneRc = mode {
@@ -618,18 +766,32 @@ fn main() {
         return;
     }
 
+    if verbose {
+        simple_logger::init_with_level(log::Level::Debug).expect("failed to initialize logging");
+    }
+
+    log::info!("starting giallo-kak server");
+    log::debug!("base_dir: {}", base_dir.display());
+
     let mut registry = match Registry::builtin() {
         Ok(registry) => registry,
         Err(err) => {
+            log::error!("failed to load giallo registry: {err}");
             eprintln!("failed to load giallo registry: {err}");
             process::exit(1);
         }
     };
+    log::debug!("registry loaded successfully");
+
     registry.link_grammars();
+    log::debug!("grammars linked");
+
     let config = Config::load();
+    log::debug!("config loaded: {:?}", config);
 
     match mode {
         Mode::Stdio => {
+            log::debug!("running in stdio mode");
             let stdin = io::stdin();
             let stdout = io::stdout();
             let mut stdin_lock = stdin.lock();
@@ -643,10 +805,12 @@ fn main() {
                 Some(&base_dir),
                 None,
             ) {
+                log::error!("server error: {err}");
                 eprintln!("server error: {err}");
             }
         }
         Mode::Oneshoot => {
+            log::debug!("running in oneshot mode");
             let stdin = io::stdin();
             let stdout = io::stdout();
             let mut stdin_lock = stdin.lock();
@@ -660,13 +824,21 @@ fn main() {
                 Some(&base_dir),
                 None,
             ) {
+                log::error!("oneshot error: {err}");
                 eprintln!("oneshot error: {err}");
             }
         }
         Mode::Fifo { req, resp } => {
+            log::debug!("running in fifo mode");
+            log::debug!("req fifo: {req}");
+            if let Some(ref r) = resp {
+                log::debug!("resp fifo: {r}");
+            }
+
             let req_file = match OpenOptions::new().read(true).write(true).open(&req) {
                 Ok(file) => file,
                 Err(err) => {
+                    log::error!("failed to open fifo for read: {req}: {err}");
                     eprintln!("failed to open fifo for read: {req}: {err}");
                     process::exit(1);
                 }
@@ -678,6 +850,7 @@ fn main() {
                 match OpenOptions::new().write(true).open(&resp_path) {
                     Ok(file) => Box::new(file),
                     Err(err) => {
+                        log::error!("failed to open fifo for write: {resp_path}: {err}");
                         eprintln!("failed to open fifo for write: {resp_path}: {err}");
                         process::exit(1);
                     }
@@ -694,11 +867,13 @@ fn main() {
                 false,
                 Some(&base_dir),
                 None,
-            )
-            {
+            ) {
+                log::error!("fifo server error: {err}");
                 eprintln!("fifo server error: {err}");
             }
         }
-        Mode::KakouneRc => {}
+        Mode::KakouneRc => unreachable!(),
     }
+
+    log::info!("giallo-kak server exiting");
 }
