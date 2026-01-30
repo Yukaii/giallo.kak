@@ -1,0 +1,55 @@
+{
+  "description": "Performance baseline thresholds for giallo-kak",
+  "version": "1.0.0",
+  "thresholds": {
+    "highlight_time": {
+      "small_file_ms": {
+        "value": 300,
+        "lines": 100,
+        "description": "Maximum time to highlight a small file (<100 lines)"
+      },
+      "medium_file_ms": {
+        "value": 1000,
+        "lines": 1000,
+        "description": "Maximum time to highlight a medium file (1000 lines)"
+      },
+      "large_file_ms": {
+        "value": 5000,
+        "lines": 10000,
+        "description": "Maximum time to highlight a large file (10000 lines)"
+      }
+    },
+    "memory": {
+      "large_file_max_mb": {
+        "value": 150,
+        "description": "Maximum memory delta when highlighting large files"
+      }
+    },
+    "throughput": {
+      "edits_per_second": {
+        "value": 10,
+        "description": "Minimum number of edit/highlight cycles per second"
+      }
+    },
+    "stress_tests": {
+      "many_buffers_max_memory_mb": {
+        "value": 200,
+        "buffers": 20,
+        "description": "Maximum memory usage for 20 concurrent buffers"
+      },
+      "memory_growth_percent": {
+        "value": 50,
+        "description": "Maximum memory growth percentage over 60 second test"
+      },
+      "idle_cpu_percent": {
+        "value": 20,
+        "description": "Maximum average CPU usage during idle periods"
+      }
+    }
+  },
+  "notes": [
+    "These thresholds are intentionally conservative to avoid flaky tests",
+    "Actual performance may vary based on hardware and system load",
+    "Thresholds may be adjusted based on CI runner performance characteristics"
+  ]
+}

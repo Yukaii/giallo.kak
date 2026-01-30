@@ -170,3 +170,133 @@ jobs:
         run: cargo publish --allow-dirty
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # Performance testing with PR comments
+  performance-report:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Kakoune
+        run: sudo apt-get update && sudo apt-get install -y kakoune bc
+
+      - name: Build for performance tests
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Run performance tests
+        id: perf
+        run: |
+          set +e  # Don't exit on error, capture test results
+          
+          # Run performance tests and capture output
+          cargo test --release --target x86_64-unknown-linux-gnu --test performance 2>&1 | tee perf_output.txt
+          TEST_EXIT_CODE=$?
+          
+          # Extract metrics from output
+          SMALL_TIME=$(grep -oP 'Small file.*?: \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
+          MEDIUM_TIME=$(grep -oP 'Medium file.*?: \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
+          LARGE_TIME=$(grep -oP 'Large file.*?: \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
+          MEMORY=$(grep -oP 'memory delta: \K[\d.]+(?=MB)' perf_output.txt | head -1 || echo "N/A")
+          
+          # Check against thresholds
+          SMALL_THRESHOLD=300
+          MEDIUM_THRESHOLD=1000
+          LARGE_THRESHOLD=5000
+          
+          REGRESSION=false
+          REGRESSION_MSG=""
+          
+          if [[ "$SMALL_TIME" != "N/A" ]] && (( $(echo "$SMALL_TIME > $SMALL_THRESHOLD" | bc -l 2>/dev/null || echo 0) )); then
+            REGRESSION=true
+            REGRESSION_MSG="${REGRESSION_MSG}\n- Small file: ${SMALL_TIME}ms (threshold: ${SMALL_THRESHOLD}ms)"
+          fi
+          
+          if [[ "$MEDIUM_TIME" != "N/A" ]] && (( $(echo "$MEDIUM_TIME > $MEDIUM_THRESHOLD" | bc -l 2>/dev/null || echo 0) )); then
+            REGRESSION=true
+            REGRESSION_MSG="${REGRESSION_MSG}\n- Medium file: ${MEDIUM_TIME}ms (threshold: ${MEDIUM_THRESHOLD}ms)"
+          fi
+          
+          if [[ "$LARGE_TIME" != "N/A" ]] && (( $(echo "$LARGE_TIME > $LARGE_THRESHOLD" | bc -l 2>/dev/null || echo 0) )); then
+            REGRESSION=true
+            REGRESSION_MSG="${REGRESSION_MSG}\n- Large file: ${LARGE_TIME}ms (threshold: ${LARGE_THRESHOLD}ms)"
+          fi
+          
+          echo "small_time=$SMALL_TIME" >> $GITHUB_OUTPUT
+          echo "medium_time=$MEDIUM_TIME" >> $GITHUB_OUTPUT
+          echo "large_time=$LARGE_TIME" >> $GITHUB_OUTPUT
+          echo "memory=$MEMORY" >> $GITHUB_OUTPUT
+          echo "regression=$REGRESSION" >> $GITHUB_OUTPUT
+          echo "regression_msg=$REGRESSION_MSG" >> $GITHUB_OUTPUT
+          
+          exit $TEST_EXIT_CODE
+        continue-on-error: true
+
+      - name: Post Performance Report
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SMALL_TIME: ${{ steps.perf.outputs.small_time }}
+          MEDIUM_TIME: ${{ steps.perf.outputs.medium_time }}
+          LARGE_TIME: ${{ steps.perf.outputs.large_time }}
+          MEMORY: ${{ steps.perf.outputs.memory }}
+          REGRESSION: ${{ steps.perf.outputs.regression }}
+          REGRESSION_MSG: ${{ steps.perf.outputs.regression_msg }}
+        run: |
+          # Determine status emoji
+          if [[ "$REGRESSION" == "true" ]]; then
+            STATUS="⚠️ Performance regression detected"
+          else
+            STATUS="✅ Performance within acceptable thresholds"
+          fi
+          
+          # Build the comment body
+          cat > comment.md << 'EOF'
+          ## Performance Test Results
+          
+          | Metric | Value | Threshold |
+          |--------|-------|-----------|
+          | Small file (100 lines) | ${SMALL_TIME}ms | 300ms |
+          | Medium file (1000 lines) | ${MEDIUM_TIME}ms | 1000ms |
+          | Large file (10000 lines) | ${LARGE_TIME}ms | 5000ms |
+          | Memory delta | ${MEMORY}MB | 150MB |
+          
+          **Status:** ${STATUS}
+          EOF
+          
+          if [[ "$REGRESSION" == "true" ]]; then
+            cat >> comment.md << EOF
+          
+          ### ⚠️ Regressions Detected:
+          ${REGRESSION_MSG}
+          
+          Please investigate these performance changes.
+          EOF
+          fi
+          
+          cat >> comment.md << 'EOF'
+          
+          ---
+          *Tested on: ubuntu-latest, x86_64*
+          EOF
+          
+          gh pr comment "$PR_NUMBER" --body-file comment.md
+        continue-on-error: true
+
+      - name: Upload Performance Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-report-pr-${{ github.event.pull_request.number }}
+          path: perf_output.txt
+          if-no-files-found: ignore

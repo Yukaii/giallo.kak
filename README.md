@@ -288,11 +288,75 @@ Generate performance test fixtures:
 cargo run --bin generate_perf_fixtures
 ```
 
+### Stress Tests
+
+Stress tests simulate realistic multi-buffer editing scenarios with resource monitoring:
+
+```bash
+# Run stress tests (requires Kakoune, takes 2-3 minutes)
+cargo test --release e2e_stress -- --test-threads=1
+```
+
+**Stress Test Scenarios:**
+
+| Test | Description | Duration |
+|------|-------------|----------|
+| `stress_many_buffers` | Open 20 buffers simultaneously | ~15s |
+| `stress_rapid_editing` | 100 rapid edits with rehighlighting | ~10s |
+| `stress_continuous_updates` | Simulate typing session (300 updates) | ~30s |
+| `stress_memory_stability` | Monitor memory over 60 seconds | ~60s |
+| `stress_concurrent_typing` | Type in 5 buffers simultaneously | ~10s |
+| `stress_large_file_editing` | Edit a 1000-line file | ~15s |
+
+**Metrics Monitored:**
+- CPU usage over time
+- Memory consumption and growth
+- Highlight latency under load
+- Throughput (edits per second)
+
+Example output:
+```
+=== Resource Usage Report ===
+Duration: 60.0s
+Samples: 60
+Memory Baseline: 45.23 MB
+Memory Average: 52.15 MB
+Memory Max: 58.92 MB
+Memory Growth: 30.3%
+CPU Average: 8.2%
+CPU Max: 15.6%
+===========================
+```
+
 ### CI/CD
 
 This project uses GitHub Actions for automated builds and releases. Every push to main builds and tests on Linux, macOS, and Windows. Tag pushes (v\*) create GitHub releases with pre-built binaries and publish to crates.io.
 
 The `builtin.msgpack` dump file is generated automatically during CI from the upstream [giallo](https://github.com/getzola/giallo) repository.
+
+#### Performance Regression Detection
+
+On every pull request, the CI runs performance tests and posts results as a comment:
+
+```
+## Performance Test Results
+
+| Metric | Value | Threshold |
+|--------|-------|-----------|
+| Small file (100 lines) | 156ms | 300ms |
+| Medium file (1000 lines) | 523ms | 1000ms |
+| Large file (10000 lines) | 2451ms | 5000ms |
+| Memory delta | 12MB | 150MB |
+
+Status: ✅ Performance within acceptable thresholds
+```
+
+If performance regressions are detected, the comment will include:
+- ⚠️ Warning indicators
+- Which specific thresholds were exceeded
+- Request for investigation
+
+Performance thresholds are defined in `.github/perf-baseline.json`.
 
 ## Special Thanks
 
