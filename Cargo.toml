@@ -1,7 +1,14 @@
 [package]
 name = "giallo-kak"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+authors = ["Yukai Huang <hi@yukai.dev>"]
+description = "Kakoune syntax highlighter using TextMate grammars"
+repository = "https://github.com/Yukaii/giallo.kak"
+license = "MIT"
+keywords = ["kakoune", "syntax-highlighting", "textmate", "editor"]
+categories = ["command-line-utilities", "text-processing"]
+rust-version = "1.74"
 
 [dependencies]
 ctrlc = "3.4"
