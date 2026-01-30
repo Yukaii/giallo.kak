@@ -93,13 +93,51 @@ giallo-enable
 giallo-set-theme kanagawa-wave
 ```
 
-## Custom Grammars
+## Configuration
 
-giallo.kak supports dynamic loading of custom TextMate grammars without rebuilding. Simply place your grammar files in a directory and configure the path in your config.
+All configuration files live under `~/.config/giallo.kak/` (or `$XDG_CONFIG_HOME/giallo.kak/`):
 
-### Quick Setup
+```
+~/.config/giallo.kak/
+├── config.toml          # Main configuration file
+├── grammars/            # Custom TextMate grammars
+│   ├── terraform.json
+│   └── my-language.json
+└── themes/              # Custom TextMate themes
+    └── my-theme.json
+```
 
-1. **Create a grammars directory**:
+### Config File
+
+The main configuration is in `config.toml`:
+
+```toml
+# Default theme
+theme = "kanagawa-wave"
+
+# Optional: paths to custom grammars and themes
+grammars_path = "~/.config/giallo.kak/grammars"
+themes_path = "~/.config/giallo.kak/themes"
+
+# Filetype mapping
+[language_map]
+sh = "shellscript"
+js = "javascript"
+tf = "terraform"
+hcl = "terraform"
+```
+
+Available themes: `kanagawa-wave`, `kanagawa-dragon`, `kanagawa-lotus`, `catppuccin-frappe`, `catppuccin-mocha`, `catppuccin-latte`, `tokyo-night`, `dracula`, `gruvbox-dark-medium`, and many more (55 total themes).
+
+See `docs/config.example.toml` for a fuller template.
+
+### Custom Grammars
+
+giallo.kak supports dynamic loading of custom TextMate grammars without rebuilding.
+
+**Quick Setup:**
+
+1. **Create the grammars directory:**
 
 ```bash
 mkdir -p ~/.config/giallo.kak/grammars
@@ -110,31 +148,21 @@ mkdir -p ~/.config/giallo.kak/grammars
    - [shikijs/textmate-grammars-themes](https://github.com/shikijs/textmate-grammars-themes)
    - Any TextMate/VSCode grammar repository
 
-3. **Configure the grammars path** in `~/.config/giallo.kak/config.toml`:
-
-```toml
-# Path to your custom grammars directory
-grammars_path = "~/.config/giallo.kak/grammars"
-
-# Map Kakoune filetypes to grammar IDs
-[language_map]
-tf = "terraform"
-hcl = "terraform"
-```
+3. **Configure the grammars path** in your `config.toml` (see example above)
 
 4. **Restart Kakoune** - grammars are loaded automatically on startup
 
-### Advanced: Custom Grammar Aliases
+**Grammar Aliases:**
 
 Grammar files can define aliases in their metadata. For example, a `terraform.json` grammar with `"aliases": ["tf", "hcl"]` will automatically be available for those filetypes. You can also manually map filetypes using `language_map` in config.
 
-## Custom Themes
+### Custom Themes
 
 Just like grammars, giallo.kak supports dynamic loading of custom TextMate themes without rebuilding.
 
-### Quick Setup
+**Quick Setup:**
 
-1. **Create a themes directory**:
+1. **Create the themes directory:**
 
 ```bash
 mkdir -p ~/.config/giallo.kak/themes
@@ -145,14 +173,9 @@ mkdir -p ~/.config/giallo.kak/themes
    - [shikijs/textmate-grammars-themes](https://github.com/shikijs/textmate-grammars-themes)
    - Any TextMate/VSCode theme repository
 
-3. **Configure the themes path** in `~/.config/giallo.kak/config.toml`:
+3. **Configure the themes path** in your `config.toml` (see example above)
 
-```toml
-# Path to your custom themes directory
-themes_path = "~/.config/giallo.kak/themes"
-```
-
-4. **Use your custom theme**:
+4. **Use your custom theme:**
 
 ```kak
 giallo-set-theme my-custom-theme
@@ -160,7 +183,7 @@ giallo-set-theme my-custom-theme
 
 ### Building Custom Registry (Advanced)
 
-For maximum control, you can still build a custom registry dump:
+For maximum control, you can build a custom registry dump:
 
 ```rust
 use giallo::Registry;
@@ -202,51 +225,28 @@ The registry API provides these methods:
 - `Registry::add_theme_from_path(path)` - Add a theme from a JSON file
 - `Registry::save_to_file(path)` - Save the compiled registry to a msgpack file
 
-## Config
+## Development
 
-Config file path:
+### Building from Source
 
-- `$XDG_CONFIG_HOME/giallo.kak/config.toml`, or
-- `~/.config/giallo.kak/config.toml`
+See [Build from Source](#build-from-source) section above for setup instructions.
 
-Example config:
+### CI/CD
 
-```toml
-# Default theme
-theme = "kanagawa-wave"
+This project uses GitHub Actions for automated builds and releases. Every push to main builds and tests on Linux, macOS, and Windows. Tag pushes (v\*) create GitHub releases with pre-built binaries.
 
-# Filetype mapping
-[language_map]
-sh = "shellscript"
-js = "javascript"
-```
+The CI process automatically clones the upstream giallo repository, generates the `builtin.msgpack` dump, builds for multiple platforms, and creates releases.
 
-Available themes: `kanagawa-wave`, `kanagawa-dragon`, `kanagawa-lotus`, `catppuccin-frappe`, `catppuccin-mocha`, `catppuccin-latte`, `tokyo-night`, `dracula`, `gruvbox-dark-medium`, and many more (55 total themes).
+### Generating the Builtin Dump
 
-See `docs/config.example.toml` for a fuller template.
-
-## CI/CD
-
-This project uses GitHub Actions for automated builds and releases:
-
-- **Every push to main**: Builds and tests on Linux, macOS, and Windows
-- **Tag pushes (v\*)**: Creates GitHub releases with pre-built binaries
-
-The CI process automatically:
-1. Clones the upstream giallo repository
-2. Generates the `builtin.msgpack` dump
-3. Builds for multiple platforms
-4. Creates releases with binaries attached
-
-## Notes
-
-- The [`giallo`](https://github.com/getzola/giallo) builtin dump (`builtin.msgpack`) is required for `Registry::builtin()`.
-- The dump is generated in the giallo repository via:
+The `builtin.msgpack` file is generated from the upstream [giallo](https://github.com/getzola/giallo) repository:
 
 ```sh
 cd ../giallo
 just generate-dump
 ```
+
+This dump is required for `Registry::builtin()` and is included in releases.
 
 ## Special Thanks
 
