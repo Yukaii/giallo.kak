@@ -5,10 +5,10 @@
 
 mod resource_monitor;
 
-use resource_monitor::{ResourceMonitor, ResourceReport};
+use resource_monitor::ResourceMonitor;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -54,7 +54,7 @@ impl StressTestSession {
         new_path.push(path_separator);
         new_path.push(&path_env);
 
-        let mut child = Command::new("kak")
+        let child = Command::new("kak")
             .args(&["-d", "-s", &session_name])
             .env("KAKOUNE_CONFIG_DIR", temp_dir.path())
             .env("PATH", &new_path)
@@ -208,6 +208,7 @@ impl StressTestSession {
     }
 
     /// Get giallo server PID if running
+    #[allow(dead_code)]
     pub fn get_server_pid(&self) -> Option<u32> {
         // Search for giallo-kak process
         let output = Command::new("pgrep")
@@ -375,7 +376,7 @@ fn stress_many_buffers() {
 fn stress_rapid_editing() {
     skip_if_no_kakoune();
 
-    let mut session = StressTestSession::new();
+    let session = StressTestSession::new();
     let mut monitor = ResourceMonitor::for_current_process();
 
     session.create_buffer("rapid.rs", "// Start");
@@ -422,7 +423,7 @@ fn stress_rapid_editing() {
 fn stress_continuous_updates() {
     skip_if_no_kakoune();
 
-    let mut session = StressTestSession::new();
+    let session = StressTestSession::new();
     let mut monitor = ResourceMonitor::for_current_process();
 
     session.create_buffer("continuous.rs", "// Continuous test");
@@ -465,7 +466,7 @@ fn stress_continuous_updates() {
 fn stress_memory_stability() {
     skip_if_no_kakoune();
 
-    let mut session = StressTestSession::new();
+    let session = StressTestSession::new();
     let mut monitor = ResourceMonitor::for_current_process();
 
     session.create_buffer("stability.rs", "// Memory stability test");
@@ -557,7 +558,7 @@ fn stress_concurrent_typing() {
 fn stress_large_file_editing() {
     skip_if_no_kakoune();
 
-    let mut session = StressTestSession::new();
+    let session = StressTestSession::new();
     let mut monitor = ResourceMonitor::for_current_process();
 
     // Generate a large file (1000 lines)

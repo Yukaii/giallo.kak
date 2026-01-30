@@ -8,6 +8,7 @@ use sysinfo::{get_current_pid, System};
 
 /// A single resource usage sample
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ResourceSample {
     pub timestamp: Instant,
     pub elapsed_secs: f64,
@@ -18,6 +19,7 @@ pub struct ResourceSample {
 
 /// Resource usage report with statistics
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ResourceReport {
     pub samples: Vec<ResourceSample>,
     pub duration_secs: f64,
@@ -101,6 +103,7 @@ impl ResourceMonitor {
     }
 
     /// Take samples at regular intervals for a duration
+    #[allow(dead_code)]
     pub fn sample_for(&mut self, duration: Duration, interval: Duration) -> Vec<ResourceSample> {
         let start = Instant::now();
         let mut samples = Vec::new();
@@ -124,6 +127,7 @@ impl ResourceMonitor {
     }
 
     /// Generate a report from all collected samples
+    #[allow(dead_code)]
     pub fn report(&self) -> ResourceReport {
         if self.samples.is_empty() {
             return ResourceReport {
@@ -171,6 +175,7 @@ impl ResourceMonitor {
     }
 
     /// Print a formatted report to stdout
+    #[allow(dead_code)]
     pub fn print_report(&self) {
         let report = self.report();
         println!("\n=== Resource Usage Report ===");
@@ -187,6 +192,7 @@ impl ResourceMonitor {
 }
 
 /// Multi-process resource monitor for monitoring both Kakoune and giallo-kak
+#[allow(dead_code)]
 pub struct MultiProcessMonitor {
     monitors: Vec<ResourceMonitor>,
     start_time: Instant,
@@ -194,6 +200,7 @@ pub struct MultiProcessMonitor {
 
 impl MultiProcessMonitor {
     /// Create a monitor for multiple PIDs
+    #[allow(dead_code)]
     pub fn for_pids(pids: Vec<sysinfo::Pid>) -> Self {
         Self {
             monitors: pids.into_iter().map(ResourceMonitor::for_pid).collect(),
@@ -202,11 +209,13 @@ impl MultiProcessMonitor {
     }
 
     /// Sample all processes
+    #[allow(dead_code)]
     pub fn sample_all(&mut self) -> Vec<ResourceSample> {
         self.monitors.iter_mut().map(|m| m.sample()).collect()
     }
 
     /// Get combined report (sum of all processes)
+    #[allow(dead_code)]
     pub fn combined_report(&self) -> ResourceReport {
         let mut all_samples: Vec<ResourceSample> = Vec::new();
 
