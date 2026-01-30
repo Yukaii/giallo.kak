@@ -6,7 +6,7 @@ use std::process;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use giallo::{HighlightOptions, Registry, ThemeVariant, PLAIN_GRAMMAR_NAME};
@@ -37,8 +37,20 @@ struct BufferContext {
     session: String,
     buffer: String,
     sentinel: String,
-    lang: String,
-    theme: String,
+    lang: Arc<Mutex<String>>,
+    theme: Arc<Mutex<String>>,
+}
+
+impl BufferContext {
+    fn new(session: String, buffer: String, sentinel: String, lang: String, theme: String) -> Self {
+        Self {
+            session,
+            buffer,
+            sentinel,
+            lang: Arc::new(Mutex::new(lang)),
+            theme: Arc::new(Mutex::new(theme)),
+        }
+    }
 }
 
 fn normalize_hex(hex: &str) -> String {
@@ -442,15 +454,18 @@ fn run_buffer_fifo(
         // Try to receive a message with timeout
         match rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(content) => {
+                let lang = ctx.lang.lock().unwrap().clone();
+                let theme = ctx.theme.lock().unwrap().clone();
+
                 log::debug!(
                     "processor: received buffer (lang={} theme={} len={})",
-                    ctx.lang,
-                    ctx.theme,
+                    lang,
+                    theme,
                     content.len()
                 );
 
-                if !ctx.lang.is_empty() {
-                    highlight_and_send(&content, &ctx.lang, &ctx.theme, registry, config, &ctx);
+                if !lang.is_empty() {
+                    highlight_and_send(&content, &lang, &theme, registry, config, &ctx);
                 } else {
                     log::warn!(
                         "processor: empty language, skipping highlight for buffer={}",
@@ -777,6 +792,8 @@ fn run_server<R: BufRead, W: Write>(
     resources: &ServerResources,
 ) -> io::Result<()> {
     let mut line = String::new();
+    let mut buffer_contexts: std::collections::HashMap<String, BufferContext> =
+        std::collections::HashMap::new();
     loop {
         // Check quit signal
         if resources.should_quit() {
@@ -872,13 +889,15 @@ fn run_server<R: BufRead, W: Write>(
             let req_path = req.clone();
             let token_clone = token.clone();
             let config_clone = config.clone();
-            let ctx = BufferContext {
-                session: session.clone(),
-                buffer: buffer.clone(),
-                sentinel: sentinel.clone(),
-                lang: lang.clone(),
-                theme: theme.clone(),
-            };
+            let ctx = BufferContext::new(
+                session.clone(),
+                buffer.clone(),
+                sentinel.clone(),
+                lang.clone(),
+                theme.clone(),
+            );
+            // Clone for storage in map (before moving to thread)
+            let ctx_for_map = ctx.clone();
             log::debug!("INIT: spawning buffer handler thread");
             let thread_quit_flag = resources.quit_flag();
             let thread_registry = registry.clone();
@@ -901,6 +920,9 @@ fn run_server<R: BufRead, W: Write>(
                 log::debug!("buffer thread: exiting for {}", token_clone);
             });
 
+            // Store context in map for later updates
+            buffer_contexts.insert(buffer.clone(), ctx_for_map);
+
             if let Err(err) = send_to_kak(&session, &buffer, &commands) {
                 log::error!("INIT: failed to send init to kak: {}", err);
                 eprintln!("failed to send init to kak: {err}");
@@ -910,93 +932,34 @@ fn run_server<R: BufRead, W: Write>(
             continue;
         }
 
-        if cmd != "H" {
-            eprintln!("unknown command: {cmd}");
+        if cmd == "SET_THEME" {
+            let buffer = match parts.next() {
+                Some(v) => v.to_string(),
+                None => {
+                    log::error!("SET_THEME: missing buffer");
+                    continue;
+                }
+            };
+            let theme = match parts.next() {
+                Some(v) => v.to_string(),
+                None => {
+                    log::error!("SET_THEME: missing theme");
+                    continue;
+                }
+            };
+
+            if let Some(ctx) = buffer_contexts.get(&buffer) {
+                let mut ctx_theme = ctx.theme.lock().unwrap();
+                *ctx_theme = theme.clone();
+                log::debug!("SET_THEME: updated buffer={} theme={}", buffer, theme);
+            } else {
+                log::warn!("SET_THEME: buffer={} not found", buffer);
+            }
             continue;
         }
 
-        let lang = match parts.next() {
-            Some(v) => v.to_string(),
-            None => {
-                eprintln!("missing language");
-                continue;
-            }
-        };
-        let theme = match parts.next() {
-            Some(v) => v.to_string(),
-            None => {
-                eprintln!("missing theme");
-                continue;
-            }
-        };
-        let len = match parts.next() {
-            Some(v) => match v.parse::<usize>() {
-                Ok(n) => n,
-                Err(_) => {
-                    eprintln!("invalid length");
-                    continue;
-                }
-            },
-            None => {
-                eprintln!("missing length");
-                continue;
-            }
-        };
-
-        let buf = match read_exact_bytes(&mut reader, len) {
-            Ok(b) => b,
-            Err(err) => {
-                eprintln!("failed to read payload: {err}");
-                continue;
-            }
-        };
-        let text = match String::from_utf8(buf) {
-            Ok(s) => s,
-            Err(err) => {
-                eprintln!("payload is not utf-8: {err}");
-                continue;
-            }
-        };
-
-        let resolved_lang = config.resolve_lang(&lang);
-        let resolved_theme = config.resolve_theme(theme.as_str());
-
-        let options = HighlightOptions::new(&resolved_lang, ThemeVariant::Single(resolved_theme));
-        let highlighted = match registry.highlight(&text, &options) {
-            Ok(h) => h,
-            Err(err) => {
-                log::warn!(
-                    "highlight: failed for lang={} theme={}: {}",
-                    resolved_lang,
-                    resolved_theme,
-                    err
-                );
-                let fallback =
-                    HighlightOptions::new(PLAIN_GRAMMAR_NAME, ThemeVariant::Single(resolved_theme));
-                match registry.highlight(&text, &fallback) {
-                    Ok(h) => h,
-                    Err(err) => {
-                        eprintln!("highlight error: {err}");
-                        continue;
-                    }
-                }
-            }
-        };
-
-        let (faces, ranges) = build_kakoune_commands(&highlighted);
-        let commands = build_commands(&faces, &ranges);
-
-        if let Some(ref ctx) = ctx {
-            if let Err(err) = send_to_kak(&ctx.session, &ctx.buffer, &commands) {
-                eprintln!("failed to send highlights to kak: {err}");
-            }
-        } else if oneshot {
-            writer.write_all(commands.as_bytes())?;
-            writer.flush()?;
-            break;
-        } else {
-            write_response(&mut writer, &commands)?;
-        }
+        eprintln!("unknown command: {cmd}");
+        continue;
     }
 
     Ok(())

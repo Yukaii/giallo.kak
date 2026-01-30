@@ -268,9 +268,16 @@ define-command -docstring "Rehighlight current buffer using giallo" giallo-rehig
     }
 }
 
-# Set theme for current buffer (placeholder)
+# Set theme for current buffer
 define-command -params 1 -docstring "Set giallo theme for current buffer" giallo-set-theme %{ 
     set-option buffer giallo_theme %arg{1}
+    # Notify server of theme change
+    evaluate-commands %sh{
+        theme="$1"
+        if [ -n "$kak_opt_giallo_server_req" ] && [ -p "$kak_opt_giallo_server_req" ]; then
+            printf 'SET_THEME %s %s\n' "$kak_bufname" "$theme" > "$kak_opt_giallo_server_req"
+        fi
+    }
     giallo-rehighlight
 }
 
