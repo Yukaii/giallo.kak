@@ -42,7 +42,7 @@ pub fn print_help() {
     println!("  giallo-kak init                    # Print Kakoune script");
     println!("  giallo-kak list-grammars           # List grammars with descriptions");
     println!("  giallo-kak list-grammars --plain   # List grammar names only");
-    println!("  giallo-kak list-themes --plain | fzf  # Interactive theme selection");
+    println!("  giallo-kak list-themes --plain     # List theme names only");
     println!();
     println!("For more information: https://github.com/yukai/giallo.kak");
 }

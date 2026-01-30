@@ -89,13 +89,10 @@ See all available themes (built-in and custom):
 giallo-kak list-themes
 ```
 
-For scripting or use with tools like `fzf`:
+For scripting (outputs one item per line):
 
 ```bash
 giallo-kak list-themes --plain
-
-# Interactive theme selection
-giallo-kak list-themes --plain | fzf | xargs -I {} giallo-kak set-theme {}
 ```
 
 ### List Available Grammars
