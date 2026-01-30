@@ -8,7 +8,23 @@ Kakoune integration for the [`giallo`](https://github.com/getzola/giallo) TextMa
 
 ## Installation
 
-### From GitHub Releases (Recommended)
+### From crates.io
+
+Install using cargo (requires Rust toolchain):
+
+```bash
+cargo install giallo-kak
+```
+
+This will compile and install the binary to `~/.cargo/bin/giallo-kak`. Make sure `~/.cargo/bin` is in your PATH.
+
+To update to the latest version:
+
+```bash
+cargo install giallo-kak --force
+```
+
+### From GitHub Releases (Pre-built binaries)
 
 Download pre-built binaries from the [Releases](https://github.com/Yukaii/giallo.kak/releases) page:
 
