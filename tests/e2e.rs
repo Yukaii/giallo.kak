@@ -4,8 +4,8 @@
 //! between the server and Kakoune editor.
 
 use std::fs;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -55,7 +55,7 @@ impl KakouneSession {
         new_path.push(&path_env);
 
         // Spawn Kakoune in daemon mode with modified PATH
-        let mut child = Command::new("kak")
+        let child = Command::new("kak")
             .args(&["-d", "-s", &session_name])
             .env("KAKOUNE_CONFIG_DIR", temp_dir.path())
             .env("PATH", &new_path)
@@ -99,7 +99,8 @@ impl KakouneSession {
     }
 
     /// Send a command to the Kakoune session
-    pub fn send_command(&self, command: &str) {
+    #[allow(dead_code)]
+    pub fn send_command(&self, _command: &str) {
         let output = Command::new("kak")
             .args(&["-p", &self.session_name])
             .stdin(Stdio::piped())
@@ -355,7 +356,7 @@ fn e2e_rehighlight_after_edit() {
         "Should have initial highlighting"
     );
 
-    let initial_ranges = session.get_buffer_option("test.rs", "giallo_hl_ranges");
+    let _initial_ranges = session.get_buffer_option("test.rs", "giallo_hl_ranges");
 
     // Edit the buffer
     let new_code = r#"fn main() { let x = 1; let y = 2; }"#;
@@ -365,7 +366,7 @@ fn e2e_rehighlight_after_edit() {
     session.send_command("giallo-force-update");
     thread::sleep(Duration::from_millis(500));
 
-    let new_ranges = session.get_buffer_option("test.rs", "giallo_hl_ranges");
+    let _new_ranges = session.get_buffer_option("test.rs", "giallo_hl_ranges");
     assert!(
         session.has_highlighting("test.rs"),
         "Should have highlighting after edit"
