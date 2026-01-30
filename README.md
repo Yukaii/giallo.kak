@@ -44,22 +44,8 @@ chmod +x ~/.local/bin/giallo-kak
 ### Build from Source
 
 ```sh
-# 1. Clone this repository
 git clone https://github.com/Yukaii/giallo.kak.git
 cd giallo.kak
-
-# 2. Clone giallo dependency (required for the builtin dump)
-git clone https://github.com/getzola/giallo.git ../giallo
-
-# 3. Generate the builtin dump (or use the provided one)
-cd ../giallo
-npm install
-node scripts/extract-grammar-metadata.js
-cargo run --release --bin=build-registry --features=tools
-
-# 4. Copy dump back and build
-cd ../giallo.kak
-cp ../giallo/builtin.msgpack .
 cargo build --release
 ```
 
@@ -260,26 +246,15 @@ The registry API provides these methods:
 
 ## Development
 
-### Building from Source
+### Building
 
-See [Build from Source](#build-from-source) section above for setup instructions.
+See [Build from Source](#build-from-source) section above.
 
 ### CI/CD
 
-This project uses GitHub Actions for automated builds and releases. Every push to main builds and tests on Linux, macOS, and Windows. Tag pushes (v\*) create GitHub releases with pre-built binaries.
+This project uses GitHub Actions for automated builds and releases. Every push to main builds and tests on Linux, macOS, and Windows. Tag pushes (v\*) create GitHub releases with pre-built binaries and publish to crates.io.
 
-The CI process automatically clones the upstream giallo repository, generates the `builtin.msgpack` dump, builds for multiple platforms, and creates releases.
-
-### Generating the Builtin Dump
-
-The `builtin.msgpack` file is generated from the upstream [giallo](https://github.com/getzola/giallo) repository:
-
-```sh
-cd ../giallo
-just generate-dump
-```
-
-This dump is required for `Registry::builtin()` and is included in releases.
+The `builtin.msgpack` dump file is generated automatically during CI from the upstream [giallo](https://github.com/getzola/giallo) repository.
 
 ## Special Thanks
 
