@@ -2,6 +2,10 @@
 
 Kakoune integration for the [`giallo`](https://github.com/getzola/giallo) TextMate highlighter.
 
+[![Crates.io](https://img.shields.io/crates/v/giallo-kak.svg)](https://crates.io/crates/giallo-kak)
+[![GitHub Release](https://img.shields.io/github/v/release/Yukaii/giallo.kak)](https://github.com/Yukaii/giallo.kak/releases)
+[![License](https://img.shields.io/crates/l/giallo-kak.svg)](LICENSE)
+
 ## Demo
 
 [![asciicast](https://asciinema.org/a/776697.svg)](https://asciinema.org/a/776697)
