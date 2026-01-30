@@ -206,6 +206,7 @@ fn build_commands(faces: &[FaceDef], ranges: &str) -> String {
     commands
 }
 
+#[allow(dead_code)]
 fn write_response(mut out: impl Write, commands: &str) -> io::Result<()> {
     let len = commands.as_bytes().len();
     writeln!(out, "OK {len}")?;
@@ -213,6 +214,7 @@ fn write_response(mut out: impl Write, commands: &str) -> io::Result<()> {
     out.flush()
 }
 
+#[allow(dead_code)]
 fn read_exact_bytes(reader: &mut impl Read, len: usize) -> io::Result<Vec<u8>> {
     let mut buf = vec![0u8; len];
     reader.read_exact(&mut buf)?;
@@ -781,6 +783,7 @@ fn handle_init(token: &str, base_dir: &Path) -> io::Result<(PathBuf, String)> {
     Ok((req, sentinel))
 }
 
+#[allow(unused_variables)]
 fn run_server<R: BufRead, W: Write>(
     mut reader: R,
     mut writer: W,
