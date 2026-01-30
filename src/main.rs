@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 
@@ -36,6 +37,8 @@ struct BufferContext {
     session: String,
     buffer: String,
     sentinel: String,
+    lang: String,
+    theme: String,
 }
 
 fn normalize_hex(hex: &str) -> String {
@@ -342,107 +345,124 @@ fn highlight_and_send(
     }
 }
 
-fn run_buffer_fifo<R: BufRead>(
-    mut reader: R,
+fn run_buffer_fifo(
+    req_path: &Path,
     registry: &Registry,
     config: &Config,
     ctx: BufferContext,
     quit_flag: Option<&Arc<AtomicBool>>,
 ) -> io::Result<()> {
-    let mut buf = String::new();
-    let mut line = String::new();
-    let mut current_lang = String::new();
-    let mut current_theme = String::new();
-
     log::debug!(
         "buffer FIFO: starting for buffer={} sentinel={}",
         ctx.buffer,
         ctx.sentinel
     );
 
+    // Create a channel to decouple reading from processing
+    let (tx, rx): (Sender<String>, Receiver<String>) = channel();
+
+    // Clone context and quit flag for the reader thread
+    let ctx_clone = ctx.clone();
+    let quit_flag_clone = quit_flag.map(|f| f.clone());
+    let req_path_owned = req_path.to_path_buf();
+
+    // Spawn reader thread - continuously reads from FIFO
+    let reader_handle = thread::spawn(move || {
+        let mut buf = String::new();
+        let sentinel = ctx_clone.sentinel.clone(); // Clone sentinel to avoid borrow issues
+
+        // Open the FIFO read-only in non-blocking mode
+        let mut file = match open_fifo_nonblocking(&req_path_owned) {
+            Ok(f) => f,
+            Err(err) => {
+                log::error!("reader: failed to open FIFO: {}", err);
+                return;
+            }
+        };
+
+        loop {
+            // Check quit signal
+            if let Some(ref flag) = quit_flag_clone {
+                if flag.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+
+            // Try to read data from FIFO
+            let mut read_buf = String::new();
+            match file.read_to_string(&mut read_buf) {
+                Ok(0) => {
+                    // EOF - writer closed, wait a bit for next write
+                    thread::sleep(std::time::Duration::from_millis(5));
+                    continue;
+                }
+                Ok(_) => {
+                    buf.push_str(&read_buf);
+                }
+                Err(err) => {
+                    if err.kind() == io::ErrorKind::WouldBlock {
+                        thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    } else {
+                        log::warn!("reader: read error: {}", err);
+                        thread::sleep(std::time::Duration::from_millis(50));
+                        continue;
+                    }
+                }
+            }
+
+            // Check for complete messages (sentinel found)
+            while let Some(index) = buf.find(&sentinel) {
+                let content = buf[..index].to_string();
+                let end_index = index + sentinel.len();
+                buf.drain(..end_index);
+
+                // Send complete message to processing thread
+                if tx.send(content).is_err() {
+                    log::debug!("reader: channel closed, exiting");
+                    return;
+                }
+            }
+        }
+    });
+
+    // Processing loop - receives messages and processes highlights
     loop {
-        // Check quit signal if provided
+        // Check quit signal
         if let Some(flag) = quit_flag {
             if flag.load(Ordering::Relaxed) {
-                log::info!(
-                    "buffer FIFO: quit signal received, exiting for buffer={}",
-                    ctx.buffer
-                );
+                // Drop the receiver to close the channel, which will cause
+                // the reader thread to get an error on send and exit
+                drop(rx);
+                let _ = reader_handle.join();
                 break;
             }
         }
 
-        line.clear();
-        let bytes = reader.read_line(&mut line)?;
-        if bytes == 0 {
-            log::debug!("buffer FIFO: EOF reached for buffer={}", ctx.buffer);
-            break;
-        }
-
-        let trimmed = line.trim_end_matches(['\n', '\r']);
-
-        log::trace!("buffer FIFO: received line: {:?}", trimmed);
-
-        if trimmed == ctx.sentinel {
-            log::debug!(
-                "buffer FIFO: got sentinel, processing buffer (lang={} theme={} len={})",
-                current_lang,
-                current_theme,
-                buf.len()
-            );
-            if !current_lang.is_empty() {
-                highlight_and_send(&buf, &current_lang, &current_theme, registry, config, &ctx);
-            } else {
-                log::warn!(
-                    "buffer FIFO: empty language, skipping highlight for buffer={}",
-                    ctx.buffer
+        // Try to receive a message with timeout
+        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(content) => {
+                log::debug!(
+                    "processor: received buffer (lang={} theme={} len={})",
+                    ctx.lang,
+                    ctx.theme,
+                    content.len()
                 );
-            }
-            buf.clear();
-            current_lang.clear();
-            current_theme.clear();
-            continue;
-        }
 
-        if let Some(content) = trimmed.strip_suffix(&ctx.sentinel) {
-            if !content.is_empty() {
-                buf.push_str(content);
+                if !ctx.lang.is_empty() {
+                    highlight_and_send(&content, &ctx.lang, &ctx.theme, registry, config, &ctx);
+                } else {
+                    log::warn!(
+                        "processor: empty language, skipping highlight for buffer={}",
+                        ctx.buffer
+                    );
+                }
             }
-            log::debug!(
-                "buffer FIFO: got inline sentinel, processing buffer (lang={} theme={} len={})",
-                current_lang,
-                current_theme,
-                buf.len()
-            );
-            if !current_lang.is_empty() {
-                highlight_and_send(&buf, &current_lang, &current_theme, registry, config, &ctx);
-            } else {
-                log::warn!(
-                    "buffer FIFO: empty language, skipping highlight for buffer={}",
-                    ctx.buffer
-                );
+            Err(_) => {
+                // Timeout - check quit signal and continue
+                continue;
             }
-            buf.clear();
-            current_lang.clear();
-            current_theme.clear();
-            continue;
         }
-
-        if trimmed.starts_with("H ") {
-            let mut parts = trimmed.splitn(3, ' ');
-            let _ = parts.next();
-            current_lang = parts.next().unwrap_or("").to_string();
-            current_theme = parts.next().unwrap_or("").to_string();
-            log::debug!(
-                "buffer FIFO: got header lang={} theme={}",
-                current_lang,
-                current_theme
-            );
-            buf.clear();
-            continue;
-        }
-
-        buf.push_str(&line);
     }
 
     log::debug!("buffer FIFO: exiting for buffer={}", ctx.buffer);
@@ -697,6 +717,42 @@ fn create_fifo(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Open a FIFO for reading without blocking.
+///
+/// Opening a FIFO for reading normally blocks until a writer opens it.
+/// We use O_NONBLOCK to open it immediately, then clear the non-blocking flag
+/// so subsequent reads block normally (which is what we want for reading data).
+fn open_fifo_nonblocking(path: &Path) -> io::Result<std::fs::File> {
+    use std::os::fd::FromRawFd;
+
+    let c_path = std::ffi::CString::new(path.as_os_str().to_string_lossy().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid fifo path"))?;
+
+    // Open with O_NONBLOCK to prevent blocking on open()
+    let fd = unsafe { libc::open(c_path.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK, 0o644) };
+
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // Clear the O_NONBLOCK flag so reads block normally
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
+    if flags < 0 {
+        unsafe { libc::close(fd) };
+        return Err(io::Error::last_os_error());
+    }
+
+    let ret = unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) };
+    if ret < 0 {
+        unsafe { libc::close(fd) };
+        return Err(io::Error::last_os_error());
+    }
+
+    // Convert to std::fs::File
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    Ok(file)
+}
+
 fn handle_init(token: &str, base_dir: &Path) -> io::Result<(PathBuf, String)> {
     fs::create_dir_all(base_dir)?;
     let hash = token_hash(token);
@@ -776,11 +832,15 @@ fn run_server<R: BufRead, W: Write>(
                     continue;
                 }
             };
+            let lang = parts.next().unwrap_or("").to_string();
+            let theme = parts.next().unwrap_or("").to_string();
             log::debug!(
-                "INIT: session={} buffer={} token={}",
+                "INIT: session={} buffer={} token={} lang={} theme={}",
                 session,
                 buffer,
-                token
+                token,
+                lang,
+                theme
             );
 
             let Some(base_dir) = base_dir else {
@@ -816,18 +876,8 @@ fn run_server<R: BufRead, W: Write>(
                 session: session.clone(),
                 buffer: buffer.clone(),
                 sentinel: sentinel.clone(),
-            };
-            let req_file = match OpenOptions::new().read(true).write(true).open(&req_path) {
-                Ok(file) => file,
-                Err(err) => {
-                    log::error!(
-                        "INIT: failed to open buffer FIFO ({}): {}",
-                        token_clone,
-                        err
-                    );
-                    eprintln!("init thread open req error ({token_clone}): {err}");
-                    continue;
-                }
+                lang: lang.clone(),
+                theme: theme.clone(),
             };
             log::debug!("INIT: spawning buffer handler thread");
             let thread_quit_flag = resources.quit_flag();
@@ -836,14 +886,16 @@ fn run_server<R: BufRead, W: Write>(
                 log::debug!("buffer thread: starting for {}", token_clone);
                 log::debug!("buffer thread: using shared registry for {}", token_clone);
 
-                let mut req_reader = io::BufReader::new(req_file);
-                let _ = run_buffer_fifo(
-                    &mut req_reader,
+                match run_buffer_fifo(
+                    &req_path,
                     &thread_registry,
                     &config_clone,
                     ctx,
                     Some(&thread_quit_flag),
-                );
+                ) {
+                    Ok(_) => log::debug!("buffer thread: completed normally for {}", token_clone),
+                    Err(err) => log::error!("buffer thread: error for {}: {}", token_clone, err),
+                }
 
                 let _ = fs::remove_file(&req_path);
                 log::debug!("buffer thread: exiting for {}", token_clone);

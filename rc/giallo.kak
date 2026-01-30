@@ -15,6 +15,9 @@ declare-option -hidden str giallo_server_log
 declare-option -hidden bool giallo_remove_default_highlighter true
 declare-option -hidden str-list giallo_extension_map
 
+# Temp file path for buffer content
+declare-option -hidden str giallo_temp_file
+
 # Debug option: set to true to enable verbose server logging
 declare-option -hidden bool giallo_debug false
 
@@ -141,122 +144,32 @@ define-command -docstring "Initialize per-buffer FIFO for giallo" giallo-init-bu
         session="$kak_session"
         buffer="$kak_bufname"
         token="$(uuidgen 2>/dev/null || printf '%s.%s.%s' "$buffer" "$(date +%s)" "$$")"
+        lang="$kak_opt_giallo_lang"
+        theme="$kak_opt_giallo_theme"
         log_file="$kak_opt_giallo_server_log"
 
         # Write to FIFO in background to avoid blocking UI if server isn't ready yet.
-        sh -c "printf 'INIT %s %s %s\n' '$session' '$buffer' '$token' > '$fifo'" >/dev/null 2>&1 &
+        # INIT format: INIT <session> <buffer> <token> <lang> <theme>
+        sh -c "printf 'INIT %s %s %s %s %s\n' '$session' '$buffer' '$token' '$lang' '$theme' > '$fifo'" >/dev/null 2>&1 &
         if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$log_file" ]; then
-            printf 'giallo-init-buffer: session=%s buffer=%s fifo=%s\n' "$session" "$buffer" "$fifo" >>"$log_file"
+            printf 'giallo-init-buffer: session=%s buffer=%s lang=%s theme=%s fifo=%s\n' "$session" "$buffer" "$lang" "$theme" "$fifo" >>"$log_file"
         fi
     }
 }
 
 # Send buffer content to the server.
+# Checks if FIFO exists and re-initializes if needed (e.g., after server restart).
 define-command -hidden giallo-buffer-update %{
     evaluate-commands %sh{
-        if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$kak_opt_giallo_server_log" ] && [ "$kak_buffile" = "$kak_opt_giallo_server_log" ]; then
-            echo "giallo-buffer-update: skip server log buffer" >&2
+        if [ -n "$kak_opt_giallo_buf_fifo_path" ] && [ ! -p "$kak_opt_giallo_buf_fifo_path" ]; then
+            # FIFO doesn't exist anymore, need to re-initialize
+            printf 'giallo-init-buffer\n'
             exit 0
         fi
-        if [ -z "$kak_opt_giallo_buf_fifo_path" ]; then
-            if [ "$kak_opt_giallo_debug" = "true" ]; then
-                echo "giallo-buffer-update: ERROR - no fifo path" >&2
-            fi
-            exit 0
-        fi
-
-        fifo="$kak_opt_giallo_buf_fifo_path"
-        sentinel="$kak_opt_giallo_buf_sentinel"
-        lang="$kak_opt_giallo_lang"
-        theme="$kak_opt_giallo_theme"
-        log_file="$kak_opt_giallo_server_log"
-
-        lock_dir="$fifo.lock"
-        if ! mkdir "$lock_dir" 2>/dev/null; then
-            if [ "$kak_opt_giallo_debug" = "true" ]; then
-                echo "giallo-buffer-update: skip inflight update" >&2
-                if [ -n "$log_file" ]; then
-                    printf 'giallo-buffer-update: skip inflight update\n' >>"$log_file"
-                fi
-            fi
-            exit 0
-        fi
-        trap 'rmdir "$lock_dir" >/dev/null 2>&1 || true' EXIT
-
-        if [ -z "$kak_buffile" ] || [ ! -r "$kak_buffile" ]; then
-            if [ "$kak_opt_giallo_debug" = "true" ]; then
-                echo "giallo-buffer-update: skip unreadable buffile=$kak_buffile" >&2
-                if [ -n "$log_file" ]; then
-                    printf 'giallo-buffer-update: skip unreadable buffile=%s\n' "$kak_buffile" >>"$log_file"
-                fi
-            fi
-            exit 0
-        fi
-        
-        # Debug output - always log to stderr for shell debugging
-        if [ "$kak_opt_giallo_debug" = "true" ]; then
-            echo "giallo-buffer-update: START buffer=$kak_bufname" >&2
-            echo "giallo-buffer-update: fifo=$fifo" >&2
-            echo "giallo-buffer-update: lang=$lang theme=$theme" >&2
-            echo "giallo-buffer-update: sentinel=$sentinel" >&2
-            echo "giallo-buffer-update: buffile=$kak_buffile" >&2
-            if [ -n "$log_file" ]; then
-                printf 'giallo-buffer-update: buffer=%s filetype=%s lang=%s theme=%s fifo=%s sentinel=%s buffile=%s\n' \
-                    "$kak_bufname" "$kak_opt_filetype" "$lang" "$theme" "$fifo" "$sentinel" "$kak_buffile" >>"$log_file"
-            fi
-        fi
-        
-        # Check if FIFO exists
-        if [ ! -p "$fifo" ]; then
-            if [ "$kak_opt_giallo_debug" = "true" ]; then
-                echo "giallo-buffer-update: ERROR - not a fifo: $fifo" >&2
-                ls -la "$fifo" 2>&1 >&2
-                if [ -n "$log_file" ]; then
-                    printf 'giallo-buffer-update: ERROR - not a fifo: %s\n' "$fifo" >>"$log_file"
-                fi
-            fi
-            printf 'echo "giallo: ERROR - buffer fifo not found"\n'
-            exit 1
-        fi
-        
-        # Send header with language and theme
-        if [ "$kak_opt_giallo_debug" = "true" ]; then
-            echo "giallo-buffer-update: writing header..." >&2
-            if [ -n "$log_file" ]; then
-                printf 'giallo-buffer-update: writing header lang=%s theme=%s\n' "$lang" "$theme" >>"$log_file"
-            fi
-        fi
-        
-        {
-            printf 'H %s %s\n' "$lang" "$theme"
-            cat "$kak_buffile" 2>/dev/null
-            printf '%s\n' "$sentinel"
-        } > "$fifo"
-        
-        result=$?
-        if [ "$kak_opt_giallo_debug" = "true" ]; then
-            echo "giallo-buffer-update: write result=$result" >&2
-            if [ -n "$log_file" ]; then
-                printf 'giallo-buffer-update: write result=%s\n' "$result" >>"$log_file"
-            fi
-        fi
-        
-        if [ $result -ne 0 ]; then
-            if [ "$kak_opt_giallo_debug" = "true" ]; then
-                printf 'echo "giallo: ERROR - failed to write to fifo (exit %d)"\n' "$result"
-                if [ -n "$log_file" ]; then
-                    printf 'giallo-buffer-update: ERROR - write failed exit=%s\n' "$result" >>"$log_file"
-                fi
-            fi
-            exit 1
-        fi
-        
-        if [ "$kak_opt_giallo_debug" = "true" ]; then
-            echo "giallo-buffer-update: SUCCESS" >&2
-            if [ -n "$log_file" ]; then
-                printf 'giallo-buffer-update: SUCCESS\n' >>"$log_file"
-            fi
-        fi
+    }
+    evaluate-commands -no-hooks %{
+        write -force "%opt{giallo_buf_fifo_path}"
+        echo -to-file "%opt{giallo_buf_fifo_path}" -- "%opt{giallo_buf_sentinel}"
     }
 }
 
