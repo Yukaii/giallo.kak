@@ -145,3 +145,61 @@ Check `Cargo.toml` before adding new crates. Current stack:
 - `BufferContext`: Per-buffer state (session, buffer name, sentinel, lang/theme Arc<Mutex>)
 - `StyleKey`: Hashable representation of text style for face deduplication
 - `Config`: TOML-loaded configuration with language mapping and paths
+
+## Debugging
+
+### Common Issues
+
+**Buffer updates not reaching server:**
+- Check if FIFO was created: look for `buffer FIFO: starting for buffer=...` in logs
+- If no "got header" message appears, Kakoune is not sending updates
+- Use `giallo-force-update` to manually trigger an update
+- Enable debug mode: run with `--verbose` flag or set `RUST_LOG=debug`
+
+**Server commands:**
+```kak
+# Restart the server
+:giallo-stop-server
+:giallo-enable
+
+# Force immediate rehighlight
+:giallo-force-update
+
+# Debug info
+:giallo-debug
+```
+
+**Expected log flow:**
+```
+[DEBUG giallo_kak] INIT: created buffer FIFO at /tmp/.../xxx.req.fifo
+[DEBUG giallo_kak] buffer FIFO: starting for buffer=main.rs sentinel=giallo-xxx
+[DEBUG giallo_kak] buffer FIFO: got header lang=rust theme=
+[DEBUG giallo_kak] buffer FIFO: received X bytes
+[DEBUG giallo_kak] Highlighted X tokens in Y ms
+```
+
+### Memory Optimization Pattern
+
+When implementing multi-threaded features, avoid loading heavy resources per-thread:
+
+**Before (inefficient):**
+```rust
+// Each thread loads its own 70-90MB registry
+thread::spawn(move || {
+    let registry = Registry::builtin().unwrap(); // Expensive!
+    // ...
+});
+```
+
+**After (efficient):**
+```rust
+// Load once in main, share with Arc
+let registry = Arc::new(Registry::builtin().unwrap());
+
+thread::spawn(move || {
+    let result = registry.highlight(text, &options); // Shared reference
+    // ...
+});
+```
+
+The `giallo::Registry` is `Send + Sync`, making it safe to share across threads via `Arc`.
