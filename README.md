@@ -79,11 +79,42 @@ giallo-set-theme kanagawa-wave
 
 ## Custom Grammars
 
-To add custom TextMate grammars, you need to build a custom registry dump:
+giallo.kak supports dynamic loading of custom TextMate grammars without rebuilding. Simply place your grammar files in a directory and configure the path in your config.
 
-1. **Get the grammar file** (.json or .plist) - from VSCode extensions or [shikijs/textmate-grammars-themes](https://github.com/shikijs/textmate-grammars-themes)
+### Quick Setup
 
-2. **Create a Rust project** using the `giallo` crate:
+1. **Create a grammars directory**:
+
+```bash
+mkdir -p ~/.config/giallo.kak/grammars
+```
+
+2. **Download grammar files** (.json or .plist) from:
+   - VSCode extensions
+   - [shikijs/textmate-grammars-themes](https://github.com/shikijs/textmate-grammars-themes)
+   - Any TextMate/VSCode grammar repository
+
+3. **Configure the grammars path** in `~/.config/giallo.kak/config.toml`:
+
+```toml
+# Path to your custom grammars directory
+grammars_path = "~/.config/giallo.kak/grammars"
+
+# Map Kakoune filetypes to grammar IDs
+[language_map]
+tf = "terraform"
+hcl = "terraform"
+```
+
+4. **Restart Kakoune** - grammars are loaded automatically on startup
+
+### Advanced: Custom Grammar Aliases
+
+Grammar files can define aliases in their metadata. For example, a `terraform.json` grammar with `"aliases": ["tf", "hcl"]` will automatically be available for those filetypes. You can also manually map filetypes using `language_map` in config.
+
+### Building Custom Registry (Advanced)
+
+For maximum control, you can still build a custom registry dump:
 
 ```rust
 use giallo::Registry;
@@ -112,10 +143,9 @@ fn main() {
 }
 ```
 
-3. **Build giallo.kak from source** with your custom dump:
+Then replace the builtin dump and rebuild:
 
 ```bash
-# Replace the builtin dump
 cp custom.msgpack /path/to/giallo.kak/builtin.msgpack
 cargo build --release
 ```

@@ -3,9 +3,15 @@
 # Default theme when buffer doesn't set giallo_theme
 # theme = "catppuccin-frappe"
 
+# Path to directory containing custom TextMate grammars (.json/.plist files)
+# Grammars are loaded dynamically on startup - no rebuild required!
+# grammars_path = "~/.config/giallo.kak/grammars"
+
 # Map Kakoune filetypes to giallo language IDs
+# Useful when filetype doesn't match the grammar ID
 # [language_map]
 # javascript = "javascript"
 # typescript = "typescript"
 # rust = "rust"
 # sh = "shellscript"
+# tf = "terraform"
