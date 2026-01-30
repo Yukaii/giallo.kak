@@ -492,10 +492,48 @@ enum Mode {
     Fifo { req: String, resp: Option<String> },
     KakouneRc,
     ListGrammars,
+    ListGrammarsPlain,
     ListThemes,
+    ListThemesPlain,
 }
 
-fn parse_args() -> (Mode, bool) {
+fn print_help() {
+    let commit = option_env!("GIT_COMMIT").unwrap_or("unknown");
+    println!(
+        "giallo-kak {} ({}) - Kakoune syntax highlighter using TextMate grammars",
+        env!("CARGO_PKG_VERSION"),
+        commit
+    );
+    println!();
+    println!("USAGE:");
+    println!("  giallo-kak [OPTIONS] [COMMAND]");
+    println!();
+    println!("OPTIONS:");
+    println!("  -h, --help              Print this help message");
+    println!("  -v, --verbose           Enable verbose logging");
+    println!("      --version           Print version information");
+    println!("      --oneshot           Run once and exit (for testing)");
+    println!("      --fifo <PATH>       Use FIFO at PATH for IPC");
+    println!("      --resp <PATH>       Response FIFO path");
+    println!();
+    println!("COMMANDS:");
+    println!("  init                    Print Kakoune integration script");
+    println!("  list-grammars           List available grammar files");
+    println!("  list-themes             List available theme files");
+    println!();
+    println!("GRAMMAR/THEME LIST OPTIONS:");
+    println!("  --plain                 Output plain list (one per line, for fzf)");
+    println!();
+    println!("EXAMPLES:");
+    println!("  giallo-kak init                    # Print Kakoune script");
+    println!("  giallo-kak list-grammars           # List grammars with descriptions");
+    println!("  giallo-kak list-grammars --plain   # List grammar names only");
+    println!("  giallo-kak list-themes --plain | fzf  # Interactive theme selection");
+    println!();
+    println!("For more information: https://github.com/yukai/giallo.kak");
+}
+
+fn parse_args() -> (Mode, bool, bool) {
     let mut oneshot = false;
     let mut fifo_req: Option<String> = None;
     let mut fifo_resp: Option<String> = None;
@@ -503,10 +541,15 @@ fn parse_args() -> (Mode, bool) {
     let mut verbose = false;
     let mut list_grammars = false;
     let mut list_themes = false;
+    let mut plain_output = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "-h" | "--help" => {
+                print_help();
+                process::exit(0);
+            }
             "--version" => {
                 let commit = option_env!("GIT_COMMIT").unwrap_or("unknown");
                 println!("giallo-kak {} ({})", env!("CARGO_PKG_VERSION"), commit);
@@ -517,6 +560,7 @@ fn parse_args() -> (Mode, bool) {
             "init" | "--kakoune" | "--print-rc" => kakoune_rc = true,
             "list-grammars" | "--list-grammars" => list_grammars = true,
             "list-themes" | "--list-themes" => list_themes = true,
+            "--plain" => plain_output = true,
             "--fifo" => {
                 if let Some(path) = args.next() {
                     fifo_req = Some(path);
@@ -532,9 +576,17 @@ fn parse_args() -> (Mode, bool) {
     }
 
     let mode = if list_grammars {
-        Mode::ListGrammars
+        if plain_output {
+            Mode::ListGrammarsPlain
+        } else {
+            Mode::ListGrammars
+        }
     } else if list_themes {
-        Mode::ListThemes
+        if plain_output {
+            Mode::ListThemesPlain
+        } else {
+            Mode::ListThemes
+        }
     } else if let Some(req) = fifo_req {
         Mode::Fifo {
             req,
@@ -548,7 +600,7 @@ fn parse_args() -> (Mode, bool) {
         Mode::Stdio
     };
 
-    (mode, verbose)
+    (mode, verbose, plain_output)
 }
 
 fn token_hash(token: &str) -> String {
@@ -776,9 +828,11 @@ fn load_custom_themes(registry: &mut Registry, themes_path: &str) -> io::Result<
 }
 
 /// List all available grammars (builtin + custom)
-fn list_grammars(registry: &Registry, config: &Config) {
-    println!("Available grammars:");
-    println!();
+fn list_grammars(registry: &Registry, config: &Config, plain: bool) {
+    if !plain {
+        println!("Available grammars:");
+        println!();
+    }
 
     // Get builtin grammars from the registry
     let common_grammars = vec![
@@ -839,21 +893,13 @@ fn list_grammars(registry: &Registry, config: &Config) {
         }
     }
 
-    if !found_grammars.is_empty() {
-        println!("Builtin grammars ({}):", found_grammars.len());
-        for grammar in &found_grammars {
-            println!("  {}", grammar);
-        }
-        println!();
-    }
-
-    // List custom grammars from directory
+    // Collect custom grammars
+    let mut custom_grammars: Vec<String> = Vec::new();
     if let Some(ref grammars_path) = config.grammars_path {
         let path = expand_path(grammars_path);
         if path.exists() {
-            let mut custom_count = 0;
             if let Ok(entries) = fs::read_dir(&path) {
-                let mut custom_grammars: Vec<String> = entries
+                custom_grammars = entries
                     .filter_map(|e| e.ok())
                     .filter(|e| {
                         let name = e.file_name();
@@ -870,47 +916,62 @@ fn list_grammars(registry: &Registry, config: &Config) {
                         }
                     })
                     .collect();
-
                 custom_grammars.sort();
-                custom_count = custom_grammars.len();
-
-                if custom_count > 0 {
-                    println!("Custom grammars from {} ({}):", grammars_path, custom_count);
-                    for grammar in custom_grammars {
-                        println!("  {} (custom)", grammar);
-                    }
-                    println!();
-                }
             }
-
-            if custom_count == 0 && found_grammars.is_empty() {
-                println!("  No grammars found.");
-            }
-        } else {
-            if found_grammars.is_empty() {
-                println!("  No grammars found.");
-            }
-            println!(
-                "Custom grammars directory does not exist: {}",
-                grammars_path
-            );
         }
-    } else if found_grammars.is_empty() {
-        println!("  No grammars found.");
     }
 
-    println!("Use in config.toml:");
-    println!("  [language_map]");
-    println!("  <filetype> = \"<grammar_id>\"");
-    println!();
-    println!("Or in Kakoune:");
-    println!("  set-option buffer giallo_lang <grammar_id>");
+    if plain {
+        // Plain output: just names, one per line
+        for grammar in &found_grammars {
+            println!("{}", grammar);
+        }
+        for grammar in &custom_grammars {
+            println!("{}", grammar);
+        }
+    } else {
+        // Formatted output with headers
+        if !found_grammars.is_empty() {
+            println!("Builtin grammars ({}):", found_grammars.len());
+            for grammar in &found_grammars {
+                println!("  {}", grammar);
+            }
+            println!();
+        }
+
+        if !custom_grammars.is_empty() {
+            if let Some(ref grammars_path) = config.grammars_path {
+                println!(
+                    "Custom grammars from {} ({}):",
+                    grammars_path,
+                    custom_grammars.len()
+                );
+                for grammar in &custom_grammars {
+                    println!("  {} (custom)", grammar);
+                }
+                println!();
+            }
+        }
+
+        if found_grammars.is_empty() && custom_grammars.is_empty() {
+            println!("  No grammars found.");
+        }
+
+        println!("Use in config.toml:");
+        println!("  [language_map]");
+        println!("  <filetype> = \"<grammar_id>\"");
+        println!();
+        println!("Or in Kakoune:");
+        println!("  set-option buffer giallo_lang <grammar_id>");
+    }
 }
 
 /// List all available themes (builtin + custom)
-fn list_themes(registry: &Registry, config: &Config) {
-    println!("Available themes:");
-    println!();
+fn list_themes(registry: &Registry, config: &Config, plain: bool) {
+    if !plain {
+        println!("Available themes:");
+        println!();
+    }
 
     // Common builtin themes
     let common_themes = vec![
@@ -957,21 +1018,13 @@ fn list_themes(registry: &Registry, config: &Config) {
         }
     }
 
-    if !found_themes.is_empty() {
-        println!("Builtin themes ({}):", found_themes.len());
-        for theme in &found_themes {
-            println!("  {}", theme);
-        }
-        println!();
-    }
-
-    // List custom themes from directory
+    // Collect custom themes
+    let mut custom_themes: Vec<String> = Vec::new();
     if let Some(ref themes_path) = config.themes_path {
         let path = expand_path(themes_path);
         if path.exists() {
-            let mut custom_count = 0;
             if let Ok(entries) = fs::read_dir(&path) {
-                let mut custom_themes: Vec<String> = entries
+                custom_themes = entries
                     .filter_map(|e| e.ok())
                     .filter(|e| {
                         let name = e.file_name();
@@ -988,37 +1041,53 @@ fn list_themes(registry: &Registry, config: &Config) {
                         }
                     })
                     .collect();
-
                 custom_themes.sort();
-                custom_count = custom_themes.len();
-
-                if custom_count > 0 {
-                    println!("Custom themes from {} ({}):", themes_path, custom_count);
-                    for theme in custom_themes {
-                        println!("  {} (custom)", theme);
-                    }
-                    println!();
-                }
             }
-
-            if custom_count == 0 && found_themes.is_empty() {
-                println!("  No themes found.");
-            }
-        } else {
-            if found_themes.is_empty() {
-                println!("  No themes found.");
-            }
-            println!("Custom themes directory does not exist: {}", themes_path);
         }
-    } else if found_themes.is_empty() {
-        println!("  No themes found.");
     }
 
-    println!("Use in config.toml:");
-    println!("  theme = \"<theme_name>\"");
-    println!();
-    println!("Or in Kakoune:");
-    println!("  giallo-set-theme <theme_name>");
+    if plain {
+        // Plain output: just names, one per line
+        for theme in &found_themes {
+            println!("{}", theme);
+        }
+        for theme in &custom_themes {
+            println!("{}", theme);
+        }
+    } else {
+        // Formatted output with headers
+        if !found_themes.is_empty() {
+            println!("Builtin themes ({}):", found_themes.len());
+            for theme in &found_themes {
+                println!("  {}", theme);
+            }
+            println!();
+        }
+
+        if !custom_themes.is_empty() {
+            if let Some(ref themes_path) = config.themes_path {
+                println!(
+                    "Custom themes from {} ({}):",
+                    themes_path,
+                    custom_themes.len()
+                );
+                for theme in &custom_themes {
+                    println!("  {} (custom)", theme);
+                }
+                println!();
+            }
+        }
+
+        if found_themes.is_empty() && custom_themes.is_empty() {
+            println!("  No themes found.");
+        }
+
+        println!("Use in config.toml:");
+        println!("  theme = \"<theme_name>\"");
+        println!();
+        println!("Or in Kakoune:");
+        println!("  giallo-set-theme <theme_name>");
+    }
 }
 
 fn config_path() -> PathBuf {
@@ -1276,7 +1345,7 @@ fn run_server<R: BufRead, W: Write>(
 }
 
 fn main() {
-    let (mode, verbose) = parse_args();
+    let (mode, verbose, _plain) = parse_args();
     let base_dir = std::env::temp_dir().join(format!("giallo-kak-{}", process::id()));
 
     if let Mode::KakouneRc = mode {
@@ -1425,10 +1494,16 @@ fn main() {
             }
         }
         Mode::ListGrammars => {
-            list_grammars(&registry, &config);
+            list_grammars(&registry, &config, false);
+        }
+        Mode::ListGrammarsPlain => {
+            list_grammars(&registry, &config, true);
         }
         Mode::ListThemes => {
-            list_themes(&registry, &config);
+            list_themes(&registry, &config, false);
+        }
+        Mode::ListThemesPlain => {
+            list_themes(&registry, &config, true);
         }
         Mode::KakouneRc => unreachable!(),
     }
