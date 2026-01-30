@@ -93,6 +93,41 @@ giallo-enable
 giallo-set-theme kanagawa-wave
 ```
 
+## CLI Commands
+
+### List Available Themes
+
+See all available themes (built-in and custom):
+
+```bash
+giallo-kak list-themes
+```
+
+For scripting or use with tools like `fzf`:
+
+```bash
+giallo-kak list-themes --plain
+
+# Interactive theme selection
+giallo-kak list-themes --plain | fzf | xargs -I {} giallo-kak set-theme {}
+```
+
+### List Available Grammars
+
+See all available grammars with their filetype mappings:
+
+```bash
+giallo-kak list-grammars
+```
+
+List grammar names only:
+
+```bash
+giallo-kak list-grammars --plain
+```
+
+This is useful for finding the correct grammar ID when configuring `language_map` in your config.
+
 ## Configuration
 
 All configuration files live under `~/.config/giallo.kak/` (or `$XDG_CONFIG_HOME/giallo.kak/`):
@@ -127,9 +162,7 @@ tf = "terraform"
 hcl = "terraform"
 ```
 
-Available themes: `kanagawa-wave`, `kanagawa-dragon`, `kanagawa-lotus`, `catppuccin-frappe`, `catppuccin-mocha`, `catppuccin-latte`, `tokyo-night`, `dracula`, `gruvbox-dark-medium`, and many more (55 total themes).
-
-See `docs/config.example.toml` for a fuller template.
+Run `giallo-kak list-themes` to see all 55+ built-in themes and any custom themes you've added.
 
 ### Custom Grammars
 
