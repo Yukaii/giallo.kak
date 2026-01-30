@@ -7,6 +7,10 @@
 # Grammars are loaded dynamically on startup - no rebuild required!
 # grammars_path = "~/.config/giallo.kak/grammars"
 
+# Path to directory containing custom themes (.json files)
+# Themes are loaded dynamically on startup - no rebuild required!
+# themes_path = "~/.config/giallo.kak/themes"
+
 # Map Kakoune filetypes to giallo language IDs
 # Useful when filetype doesn't match the grammar ID
 # [language_map]

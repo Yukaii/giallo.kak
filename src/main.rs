@@ -491,6 +491,8 @@ enum Mode {
     Oneshoot,
     Fifo { req: String, resp: Option<String> },
     KakouneRc,
+    ListGrammars,
+    ListThemes,
 }
 
 fn parse_args() -> (Mode, bool) {
@@ -499,6 +501,8 @@ fn parse_args() -> (Mode, bool) {
     let mut fifo_resp: Option<String> = None;
     let mut kakoune_rc = false;
     let mut verbose = false;
+    let mut list_grammars = false;
+    let mut list_themes = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -511,6 +515,8 @@ fn parse_args() -> (Mode, bool) {
             "--verbose" | "-v" => verbose = true,
             "--oneshot" => oneshot = true,
             "init" | "--kakoune" | "--print-rc" => kakoune_rc = true,
+            "list-grammars" | "--list-grammars" => list_grammars = true,
+            "list-themes" | "--list-themes" => list_themes = true,
             "--fifo" => {
                 if let Some(path) = args.next() {
                     fifo_req = Some(path);
@@ -525,7 +531,11 @@ fn parse_args() -> (Mode, bool) {
         }
     }
 
-    let mode = if let Some(req) = fifo_req {
+    let mode = if list_grammars {
+        Mode::ListGrammars
+    } else if list_themes {
+        Mode::ListThemes
+    } else if let Some(req) = fifo_req {
         Mode::Fifo {
             req,
             resp: fifo_resp,
@@ -555,6 +565,8 @@ struct Config {
     language_map: HashMap<String, String>,
     #[serde(default)]
     grammars_path: Option<String>,
+    #[serde(default)]
+    themes_path: Option<String>,
 }
 
 impl Config {
@@ -712,6 +724,301 @@ fn load_custom_grammars(registry: &mut Registry, grammars_path: &str) -> io::Res
         grammars_path
     );
     Ok(())
+}
+
+/// Load custom themes from the given directory path
+fn load_custom_themes(registry: &mut Registry, themes_path: &str) -> io::Result<()> {
+    let path = expand_path(themes_path);
+    let path_str = path.display().to_string();
+    if !path.exists() {
+        log::debug!("themes path does not exist: {}", path_str);
+        return Ok(());
+    }
+
+    let mut loaded_count = 0;
+
+    for entry in fs::read_dir(&path)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        // Skip hidden files and non-files
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with('.'))
+            .unwrap_or(true)
+        {
+            continue;
+        }
+
+        if !path.is_file() {
+            continue;
+        }
+
+        // Check if it's a JSON file
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+
+        match registry.add_theme_from_path(&path) {
+            Ok(_) => {
+                loaded_count += 1;
+                log::debug!("loaded custom theme from {:?}", path);
+            }
+            Err(err) => {
+                log::warn!("failed to load theme from {:?}: {}", path, err);
+            }
+        }
+    }
+
+    log::info!("loaded {} custom themes from {}", loaded_count, themes_path);
+    Ok(())
+}
+
+/// List all available grammars (builtin + custom)
+fn list_grammars(registry: &Registry, config: &Config) {
+    println!("Available grammars:");
+    println!();
+
+    // Get builtin grammars from the registry
+    let common_grammars = vec![
+        "rust",
+        "python",
+        "javascript",
+        "typescript",
+        "json",
+        "yaml",
+        "toml",
+        "markdown",
+        "bash",
+        "go",
+        "cpp",
+        "c",
+        "java",
+        "ruby",
+        "php",
+        "html",
+        "css",
+        "scss",
+        "xml",
+        "sql",
+        "docker",
+        "terraform",
+        "hcl",
+        "shellscript",
+        "lua",
+        "vim",
+        "regex",
+        "make",
+        "cmake",
+        "ini",
+        "diff",
+        "git-commit",
+        "git-rebase",
+        "graphql",
+        "proto",
+        "swift",
+        "kotlin",
+        "scala",
+        "clojure",
+        "erlang",
+        "elixir",
+        "haskell",
+        "ocaml",
+        "fsharp",
+        "r",
+        "matlab",
+        "julia",
+        "perl",
+    ];
+
+    let mut found_grammars = Vec::new();
+    for grammar in &common_grammars {
+        if registry.contains_grammar(grammar) {
+            found_grammars.push(*grammar);
+        }
+    }
+
+    if !found_grammars.is_empty() {
+        println!("Builtin grammars ({}):", found_grammars.len());
+        for grammar in &found_grammars {
+            println!("  {}", grammar);
+        }
+        println!();
+    }
+
+    // List custom grammars from directory
+    if let Some(ref grammars_path) = config.grammars_path {
+        let path = expand_path(grammars_path);
+        if path.exists() {
+            let mut custom_count = 0;
+            if let Ok(entries) = fs::read_dir(&path) {
+                let mut custom_grammars: Vec<String> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        let name = e.file_name();
+                        let name_str = name.to_string_lossy();
+                        !name_str.starts_with('.') && e.path().is_file()
+                    })
+                    .filter_map(|e| {
+                        let path = e.path();
+                        let ext = path.extension().and_then(|e| e.to_str());
+                        if ext == Some("json") || ext == Some("plist") {
+                            path.file_stem().map(|s| s.to_string_lossy().to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                custom_grammars.sort();
+                custom_count = custom_grammars.len();
+
+                if custom_count > 0 {
+                    println!("Custom grammars from {} ({}):", grammars_path, custom_count);
+                    for grammar in custom_grammars {
+                        println!("  {} (custom)", grammar);
+                    }
+                    println!();
+                }
+            }
+
+            if custom_count == 0 && found_grammars.is_empty() {
+                println!("  No grammars found.");
+            }
+        } else {
+            if found_grammars.is_empty() {
+                println!("  No grammars found.");
+            }
+            println!(
+                "Custom grammars directory does not exist: {}",
+                grammars_path
+            );
+        }
+    } else if found_grammars.is_empty() {
+        println!("  No grammars found.");
+    }
+
+    println!("Use in config.toml:");
+    println!("  [language_map]");
+    println!("  <filetype> = \"<grammar_id>\"");
+    println!();
+    println!("Or in Kakoune:");
+    println!("  set-option buffer giallo_lang <grammar_id>");
+}
+
+/// List all available themes (builtin + custom)
+fn list_themes(registry: &Registry, config: &Config) {
+    println!("Available themes:");
+    println!();
+
+    // Common builtin themes
+    let common_themes = vec![
+        "catppuccin-frappe",
+        "catppuccin-latte",
+        "catppuccin-macchiato",
+        "catppuccin-mocha",
+        "dracula",
+        "dracula-soft",
+        "gruvbox-dark-hard",
+        "gruvbox-dark-medium",
+        "gruvbox-dark-soft",
+        "gruvbox-light-hard",
+        "gruvbox-light-medium",
+        "gruvbox-light-soft",
+        "kanagawa-dragon",
+        "kanagawa-lotus",
+        "kanagawa-wave",
+        "tokyo-night",
+        "github-dark",
+        "github-dark-default",
+        "github-dark-dimmed",
+        "github-light",
+        "github-light-default",
+        "monokai",
+        "nord",
+        "one-dark-pro",
+        "rose-pine",
+        "rose-pine-dawn",
+        "rose-pine-moon",
+        "solarized-dark",
+        "solarized-light",
+        "ayu-dark",
+        "ayu-mirage",
+        "vscode-dark",
+        "dark-plus",
+        "light-plus",
+    ];
+
+    let mut found_themes = Vec::new();
+    for theme in &common_themes {
+        if registry.contains_theme(theme) {
+            found_themes.push(*theme);
+        }
+    }
+
+    if !found_themes.is_empty() {
+        println!("Builtin themes ({}):", found_themes.len());
+        for theme in &found_themes {
+            println!("  {}", theme);
+        }
+        println!();
+    }
+
+    // List custom themes from directory
+    if let Some(ref themes_path) = config.themes_path {
+        let path = expand_path(themes_path);
+        if path.exists() {
+            let mut custom_count = 0;
+            if let Ok(entries) = fs::read_dir(&path) {
+                let mut custom_themes: Vec<String> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        let name = e.file_name();
+                        let name_str = name.to_string_lossy();
+                        !name_str.starts_with('.') && e.path().is_file()
+                    })
+                    .filter_map(|e| {
+                        let path = e.path();
+                        let ext = path.extension().and_then(|e| e.to_str());
+                        if ext == Some("json") {
+                            path.file_stem().map(|s| s.to_string_lossy().to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                custom_themes.sort();
+                custom_count = custom_themes.len();
+
+                if custom_count > 0 {
+                    println!("Custom themes from {} ({}):", themes_path, custom_count);
+                    for theme in custom_themes {
+                        println!("  {} (custom)", theme);
+                    }
+                    println!();
+                }
+            }
+
+            if custom_count == 0 && found_themes.is_empty() {
+                println!("  No themes found.");
+            }
+        } else {
+            if found_themes.is_empty() {
+                println!("  No themes found.");
+            }
+            println!("Custom themes directory does not exist: {}", themes_path);
+        }
+    } else if found_themes.is_empty() {
+        println!("  No themes found.");
+    }
+
+    println!("Use in config.toml:");
+    println!("  theme = \"<theme_name>\"");
+    println!();
+    println!("Or in Kakoune:");
+    println!("  giallo-set-theme <theme_name>");
 }
 
 fn config_path() -> PathBuf {
@@ -1016,6 +1323,14 @@ fn main() {
         }
     }
 
+    // Load custom themes from config
+    if let Some(ref themes_path) = config.themes_path {
+        if let Err(err) = load_custom_themes(&mut registry, themes_path) {
+            log::error!("failed to load custom themes: {err}");
+            eprintln!("warning: failed to load custom themes: {err}");
+        }
+    }
+
     registry.link_grammars();
     log::debug!("grammars linked");
 
@@ -1108,6 +1423,12 @@ fn main() {
                 log::error!("fifo server error: {err}");
                 eprintln!("fifo server error: {err}");
             }
+        }
+        Mode::ListGrammars => {
+            list_grammars(&registry, &config);
+        }
+        Mode::ListThemes => {
+            list_themes(&registry, &config);
         }
         Mode::KakouneRc => unreachable!(),
     }

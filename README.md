@@ -112,6 +112,36 @@ hcl = "terraform"
 
 Grammar files can define aliases in their metadata. For example, a `terraform.json` grammar with `"aliases": ["tf", "hcl"]` will automatically be available for those filetypes. You can also manually map filetypes using `language_map` in config.
 
+## Custom Themes
+
+Just like grammars, giallo.kak supports dynamic loading of custom TextMate themes without rebuilding.
+
+### Quick Setup
+
+1. **Create a themes directory**:
+
+```bash
+mkdir -p ~/.config/giallo.kak/themes
+```
+
+2. **Download theme files** (.json) from:
+   - VSCode extensions
+   - [shikijs/textmate-grammars-themes](https://github.com/shikijs/textmate-grammars-themes)
+   - Any TextMate/VSCode theme repository
+
+3. **Configure the themes path** in `~/.config/giallo.kak/config.toml`:
+
+```toml
+# Path to your custom themes directory
+themes_path = "~/.config/giallo.kak/themes"
+```
+
+4. **Use your custom theme**:
+
+```kak
+giallo-set-theme my-custom-theme
+```
+
 ### Building Custom Registry (Advanced)
 
 For maximum control, you can still build a custom registry dump:
