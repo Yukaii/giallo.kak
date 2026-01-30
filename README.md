@@ -4,7 +4,7 @@ Kakoune integration for the [`giallo`](https://github.com/getzola/giallo) TextMa
 
 ## Demo
 
-[![asciicast](https://asciinema.org/a/776004.svg)](https://asciinema.org/a/776004)
+[![asciicast](https://asciinema.org/a/776697.svg)](https://asciinema.org/a/776697)
 
 ## Installation
 
@@ -90,23 +90,23 @@ use giallo::Registry;
 
 fn main() {
     let mut registry = Registry::default();
-    
+
     // Load the builtin dump first (optional, for base grammars)
     let builtin = Registry::builtin().unwrap();
     // Or start fresh with Registry::default()
-    
+
     // Add custom grammars from files
     for entry in std::fs::read_dir("/path/to/grammars").unwrap() {
         let path = entry.unwrap().path();
         registry.add_grammar_from_path(&path).unwrap();
     }
-    
+
     // IMPORTANT: Link grammars to resolve dependencies (include/embed patterns)
     registry.link_grammars();
-    
+
     // Add custom themes the same way
     registry.add_theme_from_path("/path/to/theme.json").unwrap();
-    
+
     // Save the registry dump
     registry.save_to_file("custom.msgpack").unwrap();
 }
@@ -123,7 +123,7 @@ cargo build --release
 The registry API provides these methods:
 - `Registry::add_grammar_from_path(path)` - Add a grammar from a JSON/plist file
 - `Registry::link_grammars()` - Resolve grammar dependencies (required after adding grammars)
-- `Registry::add_theme_from_path(path)` - Add a theme from a JSON file  
+- `Registry::add_theme_from_path(path)` - Add a theme from a JSON file
 - `Registry::save_to_file(path)` - Save the compiled registry to a msgpack file
 
 ## Config
