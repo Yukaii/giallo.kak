@@ -18,6 +18,12 @@ declare-option -hidden str-list giallo_extension_map
 # Temp file path for buffer content
 declare-option -hidden str giallo_temp_file
 
+# Rate limiting: minimum milliseconds between updates (default 50ms)
+declare-option -hidden int giallo_rate_limit_ms 50
+
+# Last update timestamp in milliseconds (for rate limiting)
+declare-option -hidden int giallo_last_update_ms 0
+
 # Debug option: set to true to enable verbose server logging
 declare-option -hidden bool giallo_debug false
 
@@ -159,13 +165,30 @@ define-command -docstring "Initialize per-buffer FIFO for giallo" giallo-init-bu
 
 # Send buffer content to the server.
 # Checks if FIFO exists and re-initializes if needed (e.g., after server restart).
+# Includes rate limiting to reduce process spam during rapid editing.
 define-command -hidden giallo-buffer-update %{
     evaluate-commands %sh{
+        # Rate limiting: skip if last update was too recent
+        current_time=$(date +%s%3N 2>/dev/null || echo "0")
+        last_update="$kak_opt_giallo_last_update_ms"
+        rate_limit="$kak_opt_giallo_rate_limit_ms"
+        
+        if [ -n "$current_time" ] && [ -n "$last_update" ] && [ -n "$rate_limit" ]; then
+            elapsed=$((current_time - last_update))
+            if [ "$elapsed" -lt "$rate_limit" ]; then
+                # Too soon, skip this update
+                exit 0
+            fi
+        fi
+        
         if [ -n "$kak_opt_giallo_buf_fifo_path" ] && [ ! -p "$kak_opt_giallo_buf_fifo_path" ]; then
             # FIFO doesn't exist anymore, need to re-initialize
             printf 'giallo-init-buffer\n'
             exit 0
         fi
+        
+        # Update the last update timestamp
+        printf 'set-option buffer giallo_last_update_ms %s\n' "$current_time"
     }
     evaluate-commands -no-hooks %{
         write -force "%opt{giallo_buf_fifo_path}"
