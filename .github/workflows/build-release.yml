@@ -94,6 +94,41 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  publish-crate-prerelease:
+    needs: [build, prerelease]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Get current version and SHA
+        id: version
+        run: |
+          CURRENT_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          SHA=$(git rev-parse --short HEAD)
+          PRERELEASE_VERSION="${CURRENT_VERSION}-prerelease.${SHA}"
+          echo "current_version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+          echo "prerelease_version=${PRERELEASE_VERSION}" >> $GITHUB_OUTPUT
+          echo "Publishing prerelease version: ${PRERELEASE_VERSION}"
+
+      - name: Update version for prerelease
+        run: |
+          sed -i "s/^version = \"${{ steps.version.outputs.current_version }}\"/version = \"${{ steps.version.outputs.prerelease_version }}\"/" Cargo.toml
+          cat Cargo.toml | grep version
+
+      - name: Verify package
+        run: cargo package --allow-dirty --no-verify
+
+      - name: Publish prerelease to crates.io
+        run: cargo publish --allow-dirty
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
   release:
     needs: build
     runs-on: ubuntu-latest
