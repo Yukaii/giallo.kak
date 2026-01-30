@@ -245,11 +245,48 @@ The registry API provides these methods:
 - `Registry::add_theme_from_path(path)` - Add a theme from a JSON file
 - `Registry::save_to_file(path)` - Save the compiled registry to a msgpack file
 
-## Development
+## Testing
 
-### Building
+### Running Tests
 
-See [Build from Source](#build-from-source) section above.
+```bash
+# All tests
+cargo test --release
+
+# E2E tests (requires Kakoune installed)
+cargo test --release e2e
+
+# Performance tests
+cargo test --release performance
+```
+
+### E2E Tests
+
+E2E tests launch real Kakoune instances to verify full integration:
+- Buffer highlighting setup and teardown
+- Theme changes and re-highlighting
+- Server restart and reconnection
+- Multiple buffer handling
+
+Requirements:
+- Kakoune must be installed (`which kak`)
+- Tests create temporary sessions that are cleaned up automatically
+
+### Performance Tests
+
+Performance benchmarks track highlighting metrics:
+- **Latency**: Time to highlight files of various sizes
+  - Small (<100 lines): <300ms
+  - Medium (1000 lines): <1000ms
+  - Large (10000 lines): <5000ms
+- **Memory usage**: Delta during highlighting (<150MB for large files)
+- **Throughput**: Updates per second (>10 highlights/sec)
+- **Theme/language comparison**: Benchmark different configurations
+
+Generate performance test fixtures:
+```bash
+cargo run --bin generate_perf_fixtures
+```
 
 ### CI/CD
 
