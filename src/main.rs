@@ -1200,6 +1200,132 @@ fn run_server<R: BufRead, W: Write>(
             continue;
         }
 
+        // Handle oneshot highlight command: H <lang> <theme> <len>
+        if oneshot && line.starts_with("H ") {
+            let mut parts = line.split_whitespace();
+            let _ = parts.next(); // Skip "H"
+            let lang = parts.next().unwrap_or("plain");
+            let theme = parts.next().unwrap_or("catppuccin-frappe");
+            let len_str = parts.next().unwrap_or("0");
+            let len = len_str.parse::<usize>().unwrap_or(0);
+
+            log::debug!(
+                "oneshot highlight: lang={} theme={} len={}",
+                lang,
+                theme,
+                len
+            );
+
+            // Read the payload - must use read() not read_exact() because
+            // the BufReader may have already buffered the payload bytes
+            let mut payload = vec![0u8; len];
+            if len > 0 {
+                let mut total_read = 0;
+                while total_read < len {
+                    match reader.read(&mut payload[total_read..]) {
+                        Ok(0) => break, // EOF
+                        Ok(n) => total_read += n,
+                        Err(e) => return Err(e),
+                    }
+                }
+                if total_read < len {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        format!("expected {} bytes, got {}", len, total_read),
+                    ));
+                }
+            }
+            let text = String::from_utf8_lossy(&payload);
+
+            // Create a mock buffer context for oneshot
+            let ctx = BufferContext::new(
+                "oneshot".to_string(),
+                "buffer".to_string(),
+                "".to_string(),
+                lang.to_string(),
+                theme.to_string(),
+            );
+
+            // Highlight and output directly to writer (stdout) for oneshot mode
+            let resolved_lang = config.resolve_lang(lang);
+            let resolved_theme = config.resolve_theme(theme);
+
+            log::debug!(
+                "oneshot highlight: buffer={} lang={} (resolved={}) theme={} (resolved={}) text_len={}",
+                ctx.buffer,
+                lang,
+                resolved_lang,
+                theme,
+                resolved_theme,
+                text.len()
+            );
+
+            let options =
+                HighlightOptions::new(&resolved_lang, ThemeVariant::Single(resolved_theme));
+            let highlighted = match registry.highlight(&text, &options) {
+                Ok(h) => {
+                    log::debug!("oneshot highlight: success for {} tokens", h.tokens.len());
+                    h
+                }
+                Err(err) => {
+                    log::warn!(
+                        "oneshot highlight: failed for lang={} theme={}: {}",
+                        resolved_lang,
+                        resolved_theme,
+                        err
+                    );
+                    log::warn!(
+                        "oneshot highlight: failed with lang={}, trying plain: {}",
+                        resolved_lang,
+                        err
+                    );
+                    let fallback = HighlightOptions::new(
+                        PLAIN_GRAMMAR_NAME,
+                        ThemeVariant::Single(resolved_theme),
+                    );
+                    match registry.highlight(&text, &fallback) {
+                        Ok(h) => {
+                            log::debug!(
+                                "oneshot highlight: fallback success for {} tokens",
+                                h.tokens.len()
+                            );
+                            h
+                        }
+                        Err(err) => {
+                            log::error!("oneshot highlight: fallback also failed: {}", err);
+                            eprintln!("highlight error: {err}");
+                            break;
+                        }
+                    }
+                }
+            };
+
+            let (faces, ranges) = build_kakoune_commands(&highlighted);
+            log::debug!(
+                "oneshot highlight: built {} faces and {} ranges",
+                faces.len(),
+                if ranges.is_empty() {
+                    0
+                } else {
+                    ranges.split_whitespace().count()
+                }
+            );
+
+            let commands = build_commands(&faces, &ranges);
+            log::trace!("oneshot highlight: outputting commands:\n{}", commands);
+
+            // Write directly to stdout (the writer parameter)
+            if let Err(err) = writeln!(writer, "{}", commands) {
+                log::error!("oneshot highlight: failed to write to stdout: {}", err);
+                eprintln!("failed to write output: {err}");
+            } else {
+                log::debug!("oneshot highlight: wrote output successfully");
+            }
+
+            // In oneshot mode, exit after one highlight
+            break;
+        }
+
         let mut parts = line.split_whitespace();
         let cmd = parts.next().unwrap_or("");
 
