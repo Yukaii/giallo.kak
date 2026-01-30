@@ -5,3 +5,8 @@
 
 # local config
 config.toml
+
+# Generated performance test fixtures
+tests/fixtures/perf_*.rs
+tests/fixtures/perf_*.js
+tests/fixtures/perf_*.py
