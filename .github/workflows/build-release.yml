@@ -204,11 +204,15 @@ jobs:
           cargo test --release --target x86_64-unknown-linux-gnu --test performance 2>&1 | tee perf_output.txt
           TEST_EXIT_CODE=$?
           
-          # Extract metrics from output
-          SMALL_TIME=$(grep -oP 'Small file.*?: \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
-          MEDIUM_TIME=$(grep -oP 'Medium file.*?: \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
-          LARGE_TIME=$(grep -oP 'Large file.*?: \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
-          MEMORY=$(grep -oP 'memory delta: \K[\d.]+(?=MB)' perf_output.txt | head -1 || echo "N/A")
+          # Extract metrics from output - Rust tests output "X file (N lines...): T.ms"
+          # Small file: matches "Small file (100 lines..." - specifically Rust small file
+          SMALL_TIME=$(grep -oP 'Small file \(100[^)]*\): \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
+          # Medium file: matches "Medium file (1000 lines..." - specifically Rust medium file  
+          MEDIUM_TIME=$(grep -oP 'Medium file \(1000[^)]*\): \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
+          # Large file: matches "Large file (10000 lines..." - specifically Rust large file
+          LARGE_TIME=$(grep -oP 'Large file \(10000[^)]*\): \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
+          # Memory: get from Rust small file test
+          MEMORY=$(grep -oP 'Small file \(100[^)]*\): [\d.]+ms, memory delta: \K[\d.]+(?=MB)' perf_output.txt | head -1 || echo "N/A")
           
           # Check against thresholds
           SMALL_THRESHOLD=300
@@ -291,7 +295,16 @@ jobs:
           *Tested on: ubuntu-latest, x86_64*
           EOF
           
-          gh pr comment "$PR_NUMBER" --body-file comment.md
+          # Check for existing performance report comment
+          EXISTING_COMMENT=$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[] | select(.body | contains("## Performance Test Results")) | .id' | head -1)
+          
+          if [[ -n "$EXISTING_COMMENT" ]]; then
+            # Update existing comment
+            gh pr comment "$PR_NUMBER" --edit "$EXISTING_COMMENT" --body-file comment.md
+          else
+            # Create new comment
+            gh pr comment "$PR_NUMBER" --body-file comment.md
+          fi
         continue-on-error: true
 
       - name: Upload Performance Artifacts
