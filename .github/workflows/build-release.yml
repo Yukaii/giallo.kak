@@ -262,7 +262,7 @@ jobs:
           fi
           
           # Build the comment body
-          cat > comment.md << 'EOF'
+          cat > comment.md << EOF
           ## Performance Test Results
           
           | Metric | Value | Threshold |
@@ -285,7 +285,7 @@ jobs:
           EOF
           fi
           
-          cat >> comment.md << 'EOF'
+          cat >> comment.md << EOF
           
           ---
           *Tested on: ubuntu-latest, x86_64*
