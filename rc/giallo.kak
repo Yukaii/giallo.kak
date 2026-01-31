@@ -7,6 +7,7 @@ declare-option -hidden str giallo_theme
 declare-option -hidden range-specs giallo_hl_ranges
 declare-option -hidden str giallo_buf_fifo_path
 declare-option -hidden str giallo_buf_sentinel
+declare-option -hidden str giallo_highlighter
 declare-option -hidden bool giallo_enabled false
 declare-option -hidden int giallo_buf_update_timestamp -1
 declare-option -hidden str giallo_server_req
@@ -92,7 +93,12 @@ define-command -hidden giallo-remove-default-highlighter %{
         if [ -z "$kak_opt_filetype" ]; then
             exit 0
         fi
-        printf 'try %%{ remove-highlighter window/%s }\n' "$kak_opt_filetype"
+        # Only remove if giallo_highlighter is set (by server response)
+        # Otherwise skip - the hook will call us again when it's set
+        if [ -z "$kak_opt_giallo_highlighter" ]; then
+            exit 0
+        fi
+        printf 'try %%{ remove-highlighter window/%s }\n' "$kak_opt_giallo_highlighter"
     }
 }
 
@@ -114,9 +120,11 @@ define-command -docstring "Enable giallo highlighting for the current buffer" gi
         fi
     }
     
-    giallo-remove-default-highlighter
     try %{ remove-highlighter buffer/giallo }
     add-highlighter -override buffer/giallo ranges giallo_hl_ranges
+    hook -once buffer BufSetOption giallo_highlighter=.* %{ 
+        giallo-remove-default-highlighter
+    }
     hook -once buffer BufSetOption giallo_buf_fifo_path=.* %{ 
         evaluate-commands %sh{
             if [ "$kak_opt_giallo_enabled" = "true" ] && [ -z "$kak_opt_giallo_hl_ranges" ]; then
@@ -247,6 +255,10 @@ define-command -docstring "Rehighlight current buffer using giallo" giallo-rehig
         if [ "$kak_opt_giallo_enabled" = "true" ]; then
             printf 'try %%{ remove-highlighter buffer/giallo }\n'
             printf 'add-highlighter -override buffer/giallo ranges giallo_hl_ranges\n'
+            # Also try to remove default highlighter (in case Kakoune added it after our first attempt)
+            if [ -n "$kak_opt_giallo_highlighter" ]; then
+                printf 'try %%{ remove-highlighter window/%s }\n' "$kak_opt_giallo_highlighter"
+            fi
             if [ -z "$kak_opt_giallo_buf_fifo_path" ]; then
                 printf 'giallo-init-buffer\n'
             fi
@@ -337,8 +349,6 @@ hook -group giallo global BufSetOption filetype=.* %{
         fi
     }
 }
-
-hook -group giallo global WinDisplay .* %{ giallo-remove-default-highlighter }
 
 # Auto refresh on idle edits; uses giallo_enabled guard inside giallo-rehighlight.
 hook -group giallo global NormalIdle .* %{ giallo-rehighlight }

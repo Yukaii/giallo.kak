@@ -147,6 +147,11 @@ sh = "shellscript"
 js = "javascript"
 tf = "terraform"
 hcl = "terraform"
+
+# Highlighter mapping (to remove default Kakoune highlighters)
+# Maps giallo language to Kakoune highlighter name
+[highlighter_map]
+kak = "kakrc"
 ```
 
 Run `giallo-kak list-themes` to see all 55+ built-in themes and any custom themes you've added.

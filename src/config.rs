@@ -11,6 +11,8 @@ pub struct Config {
     #[serde(default)]
     pub language_map: HashMap<String, String>,
     #[serde(default)]
+    pub highlighter_map: HashMap<String, String>,
+    #[serde(default)]
     pub grammars_path: Option<String>,
     #[serde(default)]
     pub themes_path: Option<String>,
@@ -33,6 +35,13 @@ impl Config {
 
     pub fn resolve_lang(&self, lang: &str) -> String {
         self.language_map
+            .get(lang)
+            .cloned()
+            .unwrap_or_else(|| lang.to_string())
+    }
+
+    pub fn resolve_highlighter(&self, lang: &str) -> String {
+        self.highlighter_map
             .get(lang)
             .cloned()
             .unwrap_or_else(|| lang.to_string())

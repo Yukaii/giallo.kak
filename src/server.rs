@@ -203,10 +203,13 @@ pub fn run_server<R: BufRead, W: Write>(
                 }
             };
 
+            let highlighter = config.resolve_highlighter(&lang);
+
             let commands = format!(
-                "set-option buffer giallo_buf_fifo_path {req}\nset-option buffer giallo_buf_sentinel {sentinel}\n",
+                "set-option buffer giallo_buf_fifo_path {req}\nset-option buffer giallo_buf_sentinel {sentinel}\nset-option buffer giallo_highlighter {highlighter}\n",
                 req = req.display(),
-                sentinel = sentinel
+                sentinel = sentinel,
+                highlighter = highlighter
             );
 
             let req_path = req.clone();
