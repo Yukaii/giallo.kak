@@ -201,7 +201,7 @@ jobs:
           set +e  # Don't exit on error, capture test results
           
           # Run performance tests and capture output
-          cargo test --release --target x86_64-unknown-linux-gnu --test performance 2>&1 | tee perf_output.txt
+          cargo test --release --target x86_64-unknown-linux-gnu --test performance -- --nocapture 2>&1 | tee perf_output.txt
           TEST_EXIT_CODE=$?
           
           # Extract metrics from output using sed (portable across Linux/macOS)
