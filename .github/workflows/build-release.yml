@@ -204,15 +204,19 @@ jobs:
           cargo test --release --target x86_64-unknown-linux-gnu --test performance 2>&1 | tee perf_output.txt
           TEST_EXIT_CODE=$?
           
-          # Extract metrics from output - Rust tests output "X file (N lines...): T.ms"
-          # Small file: matches "Small file (100 lines..." - specifically Rust small file
-          SMALL_TIME=$(grep -oP 'Small file \(100[^)]*\): \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
-          # Medium file: matches "Medium file (1000 lines..." - specifically Rust medium file  
-          MEDIUM_TIME=$(grep -oP 'Medium file \(1000[^)]*\): \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
-          # Large file: matches "Large file (10000 lines..." - specifically Rust large file
-          LARGE_TIME=$(grep -oP 'Large file \(10000[^)]*\): \K[\d.]+(?=ms)' perf_output.txt | head -1 || echo "N/A")
-          # Memory: get from Rust small file test
-          MEMORY=$(grep -oP 'Small file \(100[^)]*\): [\d.]+ms, memory delta: \K[\d.]+(?=MB)' perf_output.txt | head -1 || echo "N/A")
+          # Extract metrics from output using sed (portable across Linux/macOS)
+          # Small file: matches "Small file (100 lines...): 123.45ms"
+          SMALL_TIME=$(sed -n 's/.*Small file (100[^)]*): \([0-9.]*\)ms.*/\1/p' perf_output.txt | head -1)
+          test -z "$SMALL_TIME" && SMALL_TIME="N/A"
+          # Medium file: matches "Medium file (1000 lines...): 123.45ms"
+          MEDIUM_TIME=$(sed -n 's/.*Medium file (1000[^)]*): \([0-9.]*\)ms.*/\1/p' perf_output.txt | head -1)
+          test -z "$MEDIUM_TIME" && MEDIUM_TIME="N/A"
+          # Large file: matches "Large file (10000 lines...): 123.45ms"
+          LARGE_TIME=$(sed -n 's/.*Large file (10000[^)]*): \([0-9.]*\)ms.*/\1/p' perf_output.txt | head -1)
+          test -z "$LARGE_TIME" && LARGE_TIME="N/A"
+          # Memory: get from Rust small file test "memory delta: 0.50MB"
+          MEMORY=$(sed -n 's/.*Small file (100[^)]*): [0-9.]*ms, memory delta: \([0-9.]*\)MB.*/\1/p' perf_output.txt | head -1)
+          test -z "$MEMORY" && MEMORY="N/A"
           
           # Check against thresholds
           SMALL_THRESHOLD=300
