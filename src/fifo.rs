@@ -1,6 +1,6 @@
 use std::fs;
 use std::io;
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -105,10 +105,32 @@ pub fn run_buffer_fifo(
                 }
             }
 
+            let fd = file.as_raw_fd();
+            let mut poll_fd = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let poll_result = unsafe { libc::poll(&mut poll_fd, 1, 250) };
+            if poll_result < 0 {
+                log::warn!("reader: poll error: {}", io::Error::last_os_error());
+                thread::sleep(std::time::Duration::from_millis(50));
+                continue;
+            }
+            if poll_result == 0 {
+                continue;
+            }
+            if poll_fd.revents & libc::POLLIN == 0 {
+                if poll_fd.revents & libc::POLLHUP != 0 {
+                    thread::sleep(std::time::Duration::from_millis(100));
+                }
+                continue;
+            }
+
             let mut read_buf = String::new();
             match std::io::Read::read_to_string(&mut file, &mut read_buf) {
                 Ok(0) => {
-                    thread::sleep(std::time::Duration::from_millis(5));
+                    thread::sleep(std::time::Duration::from_millis(50));
                     continue;
                 }
                 Ok(_) => {
