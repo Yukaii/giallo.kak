@@ -12,6 +12,7 @@ declare-option -hidden bool giallo_enabled false
 declare-option -hidden int giallo_buf_update_timestamp -1
 declare-option -hidden str giallo_server_req
 declare-option -hidden str giallo_server_pid
+declare-option -hidden str giallo_server_pid_seen
 declare-option -hidden str giallo_server_log
 declare-option -hidden bool giallo_remove_default_highlighter true
 declare-option -hidden str-list giallo_extension_map
@@ -144,6 +145,7 @@ define-command -docstring "Disable giallo highlighting for the current buffer" g
     set-option buffer giallo_buf_fifo_path ""
     set-option buffer giallo_buf_sentinel ""
     set-option buffer giallo_buf_update_timestamp -1
+    set-option buffer giallo_server_pid_seen ""
 }
 
 # Initialize per-buffer FIFO via server handshake.
@@ -175,12 +177,24 @@ define-command -docstring "Initialize per-buffer FIFO for giallo" giallo-init-bu
 # Checks if FIFO exists and re-initializes if needed (e.g., after server restart).
 # Includes rate limiting to reduce process spam during rapid editing.
 define-command -hidden giallo-buffer-update %{
-    evaluate-commands %sh{
+    evaluate-commands -no-hooks %sh{
         # Rate limiting: skip if last update was too recent
-        current_time=$(date +%s%3N 2>/dev/null || echo "0")
+        current_time_raw=$(date +%s%3N 2>/dev/null || echo "")
+        case "$current_time_raw" in
+            (*[!0-9]*)
+                secs=$(date +%s 2>/dev/null || echo "0")
+                current_time="${secs}000"
+                ;;
+            ("")
+                current_time="0"
+                ;;
+            (*)
+                current_time="$current_time_raw"
+                ;;
+        esac
         last_update="$kak_opt_giallo_last_update_ms"
         rate_limit="$kak_opt_giallo_rate_limit_ms"
-        
+
         if [ -n "$current_time" ] && [ -n "$last_update" ] && [ -n "$rate_limit" ]; then
             elapsed=$((current_time - last_update))
             if [ "$elapsed" -lt "$rate_limit" ]; then
@@ -188,19 +202,53 @@ define-command -hidden giallo-buffer-update %{
                 exit 0
             fi
         fi
-        
-        if [ -n "$kak_opt_giallo_buf_fifo_path" ] && [ ! -p "$kak_opt_giallo_buf_fifo_path" ]; then
-            # FIFO doesn't exist anymore, need to re-initialize
+
+        server_pid="$kak_opt_giallo_server_pid"
+        server_req="$kak_opt_giallo_server_req"
+
+        if [ -n "$server_pid" ]; then
+            if ! kill -0 "$server_pid" >/dev/null 2>&1; then
+                printf 'giallo-stop-server\n'
+                printf 'giallo-start-server\n'
+                printf 'giallo-init-buffer\n'
+                exit 0
+            fi
+            server_comm=$(ps -p "$server_pid" -o comm= 2>/dev/null || true)
+            case "$server_comm" in
+                (*giallo-kak*) ;;
+                (*)
+                    printf 'giallo-stop-server\n'
+                    printf 'giallo-start-server\n'
+                    printf 'giallo-init-buffer\n'
+                    exit 0
+                    ;;
+            esac
+        fi
+
+        if [ -n "$server_req" ] && [ ! -p "$server_req" ]; then
+            printf 'giallo-stop-server\n'
+            printf 'giallo-start-server\n'
             printf 'giallo-init-buffer\n'
             exit 0
         fi
-        
-        # Update the last update timestamp
+
+        server_pid_seen="$kak_opt_giallo_server_pid_seen"
+        if [ -n "$server_pid" ] && [ "$server_pid" != "$server_pid_seen" ]; then
+            printf 'set-option buffer giallo_server_pid_seen %s\n' "$server_pid"
+            printf 'giallo-init-buffer\n'
+            exit 0
+        fi
+
+        fifo_path="$kak_opt_giallo_buf_fifo_path"
+        if [ -z "$fifo_path" ] || [ ! -p "$fifo_path" ]; then
+            printf 'giallo-init-buffer\n'
+            exit 0
+        fi
+
+        # Update the last update timestamp only when we actually write
         printf 'set-option buffer giallo_last_update_ms %s\n' "$current_time"
-    }
-    evaluate-commands -no-hooks %{
-        write -force "%opt{giallo_buf_fifo_path}"
-        echo -to-file "%opt{giallo_buf_fifo_path}" -- "%opt{giallo_buf_sentinel}"
+        printf 'write -force "%s"\n' "$fifo_path"
+        printf 'echo -to-file "%s" -- "%s"\n' "$fifo_path" "$kak_opt_giallo_buf_sentinel"
     }
 }
 
