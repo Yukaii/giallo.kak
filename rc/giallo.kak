@@ -167,6 +167,7 @@ define-command -docstring "Initialize per-buffer FIFO for giallo" giallo-init-bu
         # Write to FIFO in background to avoid blocking UI if server isn't ready yet.
         # INIT format: INIT <session> <buffer> <token> <lang> <theme>
         sh -c "printf 'INIT %s %s %s %s %s\n' '$session' '$buffer' '$token' '$lang' '$theme' > '$fifo'" >/dev/null 2>&1 &
+        printf 'hook -once buffer BufSetOption giallo_buf_fifo_path=.* %%{ giallo-buffer-update }\n'
         if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$log_file" ]; then
             printf 'giallo-init-buffer: session=%s buffer=%s lang=%s theme=%s fifo=%s\n' "$session" "$buffer" "$lang" "$theme" "$fifo" >>"$log_file"
         fi
