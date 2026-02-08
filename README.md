@@ -3,6 +3,7 @@
 Rich TextMate syntax highlighting for Kakoune with VSCode-quality colors, live theme switching, and easy customization.
 
 [![Crates.io](https://img.shields.io/crates/v/giallo-kak.svg)](https://crates.io/crates/giallo-kak)
+[![Crates.io Pre-release](https://img.shields.io/crates/v/giallo-kak.svg?include_prerelease&label=pre-release)](https://crates.io/crates/giallo-kak)
 [![GitHub Release](https://img.shields.io/github/v/release/Yukaii/giallo.kak)](https://github.com/Yukaii/giallo.kak/releases)
 [![License](https://img.shields.io/crates/l/giallo-kak.svg)](LICENSE)
 
