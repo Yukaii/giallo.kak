@@ -3,52 +3,55 @@
 ## Build, Test & Lint Commands
 
 ```bash
-# Build the project
+# Build the project (edition 2021, MSRV 1.74)
 cargo build --release
 
-# Run all tests
+# Run all tests (use --release for accurate perf benchmarks)
 cargo test --release
 
-# Run a specific test (example patterns)
-cargo test --release <test_name>           # Run single test by name
+# Run a specific test by name substring
+cargo test --release <test_name>
 cargo test --release fixture_tests         # Run fixture test suite
 cargo test --release oneshot_terraform     # Run specific oneshot test
 cargo test --release rust_keyword          # Run keyword tests matching pattern
 
-# Build for specific target (CI)
+# Cross-compile targets (CI matrix)
 cargo build --release --target x86_64-unknown-linux-gnu
 cargo build --release --target x86_64-apple-darwin
 cargo build --release --target aarch64-apple-darwin
 
-# There is no lint command configured - rely on cargo build warnings
+# No separate lint command - rely on cargo build warnings
 ```
 
 ## Code Style Guidelines
 
 ### Naming Conventions
-- **Types**: PascalCase (`BufferContext`, `StyleKey`)
+- **Types/Structs/Enums**: PascalCase (`BufferContext`, `StyleKey`, `FaceDef`, `Mode`)
 - **Functions/Variables**: snake_case (`highlight_and_send`, `buffer_contexts`)
-- **Constants**: SCREAMING_SNAKE_CASE (`DEFAULT_THEME`)
-- **Modules**: snake_case (`registry_loader`, `highlighting`)
+- **Constants**: SCREAMING_SNAKE_CASE (`DEFAULT_THEME`, `PLAIN_GRAMMAR_NAME`)
+- **Modules**: snake_case, one file per module (`registry_loader`, `highlighting`)
 - **Acronyms**: Treat as words (`HttpRequest` not `HTTPRequest`)
 
 ### Import Order
-1. Standard library imports grouped by category (std::io, std::fs, std::sync)
-2. Third-party crate imports
-3. Internal module imports (`crate::config::Config`)
+1. Standard library (`std::io`, `std::fs`, `std::sync`, `std::collections`)
+2. Third-party crates (`giallo`, `log`, `serde`)
+3. Internal modules (`crate::config::Config`, `crate::fifo`)
+
+Separate each group with a blank line. Group related std imports on one line when short.
 
 ### Formatting
-- No spaces after `{` in format strings: `format!("error: {err}")` not `format!("error: { err }")`
-- Use `let-else` syntax for early returns when possible
+- No spaces inside `{}` in format strings: `format!("error: {err}")` not `format!("error: { err }")`
+- Use `let-else` for early returns: `let Some(x) = val else { continue; };`
 - Keep functions focused and under ~100 lines
-- Prefer `?` operator for error propagation
-- Use `Arc<Mutex<T>>` for thread-shared mutable state
+- Prefer `?` operator for error propagation over manual match
+- Use `Arc<Mutex<T>>` for thread-shared mutable state, `Arc<AtomicBool>` for flags
+- Derive traits in order: `Clone, Debug, PartialEq, Eq, Hash`
 
 ### Error Handling
-- Use `io::Error` for most error types
-- Log errors with context: `log::error!("action failed: {err}")`
-- Use `eprintln!` for user-facing errors
-- Pattern for error logging:
+- Use `io::Error` as the primary error type; return `io::Result<T>`
+- Log errors with context before propagating: `log::error!("action failed: {err}")`
+- Use `eprintln!` for user-facing error messages
+- Pattern:
   ```rust
   match operation() {
       Ok(result) => result,
@@ -59,147 +62,93 @@ cargo build --release --target aarch64-apple-darwin
       }
   }
   ```
+- For non-critical failures, warn and fall back gracefully (e.g., fallback to plain grammar)
 
 ### Logging Levels
-- `log::error!`: Unexpected failures that affect functionality
-- `log::warn!`: Recoverable issues or fallbacks (e.g., grammar fallback to plain)
-- `log::info!`: Major lifecycle events (server start/stop)
+- `log::error!`: Unexpected failures affecting functionality
+- `log::warn!`: Recoverable issues or fallbacks
+- `log::info!`: Major lifecycle events (server start/stop, cleanup)
 - `log::debug!`: Operation details (highlighting success, config loading)
-- `log::trace!`: Detailed data dumps (command payloads)
+- `log::trace!`: Detailed data dumps (full command payloads)
 
 ### Module Organization
-Keep related functionality in dedicated modules:
-- `cli.rs`: Command-line parsing and help text
-- `config.rs`: Configuration loading and path handling
-- `fifo.rs`: FIFO file operations and buffer processing
-- `highlight.rs`: Highlighting orchestration and Kakoune communication
-- `highlighting.rs`: Style-to-face conversion logic
-- `registry_loader.rs`: Custom grammar/theme loading
-- `server.rs`: Main server loop and command handling
-- `kakoune.rs`: Kakoune-specific utilities (quoting)
+Each module is a single file in `src/`. Keep related functionality together:
+- `cli.rs`: Command-line argument parsing into `Mode` enum
+- `config.rs`: TOML configuration loading and path resolution
+- `commands.rs`: `list-grammars` / `list-themes` output formatting
+- `fifo.rs`: Named pipe (FIFO) creation and buffer content reader threads
+- `highlight.rs`: Highlighting orchestration and Kakoune command dispatch
+- `highlighting.rs`: Style-to-face conversion and Kakoune command building
+- `kakoune.rs`: Kakoune-specific utilities (shell quoting)
+- `registry_loader.rs`: Custom grammar/theme loading from user config paths
+- `server.rs`: Main server loop handling INIT, SET_THEME, PING, oneshot H commands
+- `server_resources.rs`: Signal handling, graceful shutdown, temp dir cleanup (RAII)
 
 ### Key Patterns
 
-**Configuration Resolution:**
+**Thread-safe shared registry** (70-90MB, load once):
 ```rust
-pub fn resolve_theme<'a>(&'a self, theme: &'a str) -> &'a str {
-    if theme.is_empty() {
-        self.theme.as_deref().unwrap_or(DEFAULT_THEME)
-    } else {
-        theme
-    }
-}
+let registry = Arc::new(Registry::builtin().unwrap());
+// Clone Arc for each thread, not the registry itself
+let thread_registry = Arc::clone(&registry);
+std::thread::spawn(move || { thread_registry.highlight(&text, &options); });
 ```
 
-**Thread-Safe Context Updates:**
+**Per-buffer mutable state** via `Arc<Mutex<T>>`:
 ```rust
 pub theme: Arc<Mutex<String>>,
 // Access: let theme = ctx.theme.lock().unwrap().clone();
 ```
 
-**Graceful Degradation:**
+**Graceful degradation** on highlight failure:
 ```rust
-match registry.highlight(text, &options) {
+match registry.highlight(&text, &options) {
     Ok(h) => h,
     Err(err) => {
-        log::warn!("primary failed, trying fallback: {err}");
-        // Fallback logic
+        log::warn!("failed for lang={lang}: {err}");
+        // Retry with PLAIN_GRAMMAR_NAME as fallback
+        registry.highlight(&text, &fallback_options)?
     }
 }
 ```
 
+**RAII cleanup** via Drop trait (see `server_resources.rs`):
+```rust
+impl Drop for ServerResources {
+    fn drop(&mut self) { cleanup_base_dir(&self.base_dir); }
+}
+```
+
 ### Testing
-- Use `cargo test --release` for accurate performance
-- Integration tests in `tests/` directory
-- Fixture tests for end-to-end validation
-- Test helper functions for common setup (see `tests/fixture_tests.rs`)
+- All tests are integration tests in `tests/` (no unit tests in `src/`)
+- Tests use oneshot mode: spawn `giallo-kak --oneshot` as a subprocess
+- Binary path via `env!("CARGO_BIN_EXE_giallo-kak")`
+- Test helpers: `make_temp_dir()`, `write_config()`, `run_oneshot_highlight()`
+- Performance tests have thresholds: small <500ms, medium <1s, large <5s
+- E2E tests require a real Kakoune instance
 
 ### Dependencies
 Check `Cargo.toml` before adding new crates. Current stack:
-- `giallo`: Core TextMate highlighting engine
-- `serde` + `serde_json` + `toml`: Serialization
-- `log` + `simple_logger`: Logging
-- `libc`: Low-level system calls
-- `ctrlc`: Signal handling
-- `which`: Executable detection
+- `giallo` (with "dump" feature): Core TextMate highlighting engine
+- `serde` + `serde_json` + `toml`: Serialization / config parsing
+- `log` + `simple_logger`: Logging infrastructure
+- `libc`: Low-level system calls (FIFO creation)
+- `ctrlc`: Signal handling for graceful shutdown
+- `which`: Executable path detection
+- Dev: `sysinfo`, `tempfile`, `rand`
 
-### Architecture Notes
-
-**Main Components:**
-1. **CLI Parser** (`cli.rs`): Parses arguments into `Mode` enum variants
-2. **Server** (`server.rs`): Main command loop handling INIT, SET_THEME, PING, and oneshot H commands
-3. **FIFO Handler** (`fifo.rs`): Channel-based reader/processor for buffer content via named pipes
-4. **Highlighting Pipeline**:
-   - `highlight.rs`: Orchestrates highlighting and sends results to Kakoune
-   - `highlighting.rs`: Converts giallo styles to Kakoune face specifications
-5. **Registry Loader** (`registry_loader.rs`): Loads custom grammars/themes from user config paths
+## Architecture
 
 **Communication Flow:**
-1. Kakoune sends INIT command with session/buffer/token
-2. Server creates FIFO per buffer and spawns reader thread
-3. Kakoune writes buffer content to FIFO (with sentinel delimiter)
-4. Reader thread sends complete content via channel to processor
-5. Processor highlights text and sends Kakoune commands back via `kak -p`
+1. Kakoune sources `rc/giallo.kak` which defines hooks and commands
+2. Server starts via `giallo-kak --fifo <path>` (background process)
+3. `INIT session buffer token lang theme` creates a per-buffer FIFO + reader thread
+4. Kakoune hooks write buffer content to the per-buffer FIFO (with sentinel delimiter)
+5. Reader thread parses content, highlights via `giallo::Registry`
+6. Results sent back to Kakoune as `set-face` / `set-option` commands via `kak -p session`
 
 **Key Data Structures:**
-- `BufferContext`: Per-buffer state (session, buffer name, sentinel, lang/theme Arc<Mutex>)
-- `StyleKey`: Hashable representation of text style for face deduplication
-- `Config`: TOML-loaded configuration with language mapping and paths
-
-## Debugging
-
-### Common Issues
-
-**Buffer updates not reaching server:**
-- Check if FIFO was created: look for `buffer FIFO: starting for buffer=...` in logs
-- If no "got header" message appears, Kakoune is not sending updates
-- Use `giallo-force-update` to manually trigger an update
-- Enable debug mode: run with `--verbose` flag or set `RUST_LOG=debug`
-
-**Server commands:**
-```kak
-# Restart the server
-:giallo-stop-server
-:giallo-enable
-
-# Force immediate rehighlight
-:giallo-force-update
-
-# Debug info
-:giallo-debug
-```
-
-**Expected log flow:**
-```
-[DEBUG giallo_kak] INIT: created buffer FIFO at /tmp/.../xxx.req.fifo
-[DEBUG giallo_kak] buffer FIFO: starting for buffer=main.rs sentinel=giallo-xxx
-[DEBUG giallo_kak] buffer FIFO: got header lang=rust theme=
-[DEBUG giallo_kak] buffer FIFO: received X bytes
-[DEBUG giallo_kak] Highlighted X tokens in Y ms
-```
-
-### Memory Optimization Pattern
-
-When implementing multi-threaded features, avoid loading heavy resources per-thread:
-
-**Before (inefficient):**
-```rust
-// Each thread loads its own 70-90MB registry
-thread::spawn(move || {
-    let registry = Registry::builtin().unwrap(); // Expensive!
-    // ...
-});
-```
-
-**After (efficient):**
-```rust
-// Load once in main, share with Arc
-let registry = Arc::new(Registry::builtin().unwrap());
-
-thread::spawn(move || {
-    let result = registry.highlight(text, &options); // Shared reference
-    // ...
-});
-```
-
-The `giallo::Registry` is `Send + Sync`, making it safe to share across threads via `Arc`.
+- `Mode`: Enum of operating modes (Stdio, Oneshoot, Fifo, ListGrammars, etc.)
+- `BufferContext`: Per-buffer state (session, buffer name, sentinel, lang/theme)
+- `StyleKey`: Hashable style representation for face deduplication
+- `Config`: TOML-loaded config with language mapping and custom grammar/theme paths
