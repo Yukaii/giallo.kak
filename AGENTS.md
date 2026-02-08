@@ -129,7 +129,7 @@ impl Drop for ServerResources {
 
 ### Dependencies
 Check `Cargo.toml` before adding new crates. Current stack:
-- `giallo` (with "dump" feature): Core TextMate highlighting engine
+- `giallo` (v0.3.1 with "dump" feature): Core TextMate highlighting engine
 - `serde` + `serde_json` + `toml`: Serialization / config parsing
 - `log` + `simple_logger`: Logging infrastructure
 - `libc`: Low-level system calls (FIFO creation)
