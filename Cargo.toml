@@ -8,23 +8,23 @@ repository = "https://github.com/Yukaii/giallo.kak"
 license = "MIT"
 keywords = ["kakoune", "syntax-highlighting", "textmate", "editor"]
 categories = ["command-line-utilities", "text-processing"]
-rust-version = "1.74"
+rust-version = "1.88"
 
 [dependencies]
-ctrlc = "3.4"
+ctrlc = "3.5"
 giallo = { version = "0.3.1", features = ["dump"] }
 libc = "0.2"
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 simple_logger = "5"
-toml = "0.8"
-which = "6"
+toml = "1.1"
+which = "8"
 
 [dev-dependencies]
-sysinfo = "0.30"
-tempfile = "3.10"
-rand = "0.8"
+sysinfo = "0.38"
+tempfile = "3.27"
+rand = "0.10"
 
 [[bin]]
 name = "generate_perf_fixtures"

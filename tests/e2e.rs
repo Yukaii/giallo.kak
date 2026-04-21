@@ -11,6 +11,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+static SESSION_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Represents a Kakoune session for testing
 pub struct KakouneSession {
     session_name: String,
@@ -23,7 +25,11 @@ impl KakouneSession {
     /// Create a new Kakoune session with giallo.kak loaded
     pub fn new() -> Self {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
-        let session_name = format!("giallo-test-{}", std::process::id());
+        let session_name = format!(
+            "giallo-test-{}-{}",
+            std::process::id(),
+            SESSION_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        );
         let giallo_bin = PathBuf::from(env!("CARGO_BIN_EXE_giallo-kak"));
 
         // Verify the test binary exists
@@ -100,14 +106,23 @@ impl KakouneSession {
 
     /// Send a command to the Kakoune session
     #[allow(dead_code)]
-    pub fn send_command(&self, _command: &str) {
-        let output = Command::new("kak")
+    pub fn send_command(&self, command: &str) {
+        let mut child = Command::new("kak")
             .args(&["-p", &self.session_name])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()
-            .expect("failed to run kak -p");
+            .spawn()
+            .expect("failed to spawn kak -p");
+
+        {
+            let stdin = child.stdin.as_mut().expect("failed to get stdin");
+            stdin
+                .write_all(command.as_bytes())
+                .expect("failed to write to kak");
+        }
+
+        let output = child.wait_with_output().expect("failed to wait for kak");
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

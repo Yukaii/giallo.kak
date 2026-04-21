@@ -3,7 +3,7 @@
 ## Build, Test & Lint Commands
 
 ```bash
-# Build the project (edition 2021, MSRV 1.74)
+# Build the project (edition 2021, MSRV 1.88)
 cargo build --release
 
 # Run all tests (use --release for accurate perf benchmarks)

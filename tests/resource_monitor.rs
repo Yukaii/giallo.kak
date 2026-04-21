@@ -4,7 +4,7 @@
 //! over time during test execution.
 
 use std::time::{Duration, Instant};
-use sysinfo::{get_current_pid, System};
+use sysinfo::{get_current_pid, ProcessesToUpdate, System};
 
 /// A single resource usage sample
 #[derive(Debug, Clone)]
@@ -83,8 +83,9 @@ impl ResourceMonitor {
 
     /// Take a resource sample
     pub fn sample(&mut self) -> ResourceSample {
-        self.system.refresh_process(self.pid);
-        self.system.refresh_cpu();
+        self.system
+            .refresh_processes(ProcessesToUpdate::Some(&[self.pid]), true);
+        self.system.refresh_cpu_usage();
 
         let elapsed = self.start_time.elapsed().as_secs_f64();
 
