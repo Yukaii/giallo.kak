@@ -1,10 +1,12 @@
 # Performance Improvement Notes
 
-Quick wins already landed on `perf/quick-wins`:
+Landed on `perf/quick-wins`:
 
 - `[profile.release]` with thin LTO and `codegen-units = 1`
 - Cached the `kak` binary PATH lookup (was re-scanned per send)
 - Ranges built into a single pre-sized buffer; face names no longer cloned per token
+- Direct socket send instead of spawning `kak -p` per update (see #1)
+- Chunked delta sends + bounded-window incremental re-parsing (see #3/#4)
 
 Remaining ideas, roughly ranked by expected impact.
 
@@ -29,19 +31,33 @@ use, and skip registry construction entirely for list modes. Check whether
 giallo 0.4.0 offers lazy loading or mmap-backed dumps; upgrading may help both
 memory and startup time.
 
-## 3. Incremental / dirty-region highlighting
+## 3. ~~Incremental / dirty-region highlighting~~ (done)
 
-Full buffer content is re-highlighted on every keystroke batch (rate-limited
-to 50ms shell-side). For large files this dominates cost. Options:
-dirty-line tracking between Kakoune and the server, or an upstream giallo
-incremental API if one exists.
+Implemented server-side, no upstream giallo changes needed:
 
-## 4. Cache face maps per (lang, theme) across requests
+- **Chunked delta sends** (`src/highlight.rs`): output is split into 1000-line
+  chunks mapped to buffer options `giallo_hl_ranges` (chunk 0, legacy name) and
+  `giallo_hl_ranges_N`. Only chunks whose tokens changed are re-sent; identical
+  updates skip the send entirely. Chunk highlighters are registered explicitly
+  by the server - commands over the session socket run hook-less
+  (`Context::EmptyContextFlag`), so BufSetOption hooks cannot be relied on.
+- **Bounded-window re-parse**: the changed region is detected via common
+  prefix/suffix against the cached text. Small edits that don't touch string/
+  comment delimiters re-parse only `[dirty-200 .. dirty+50]` lines
+  (`WARMUP_LINES`/`MARGIN_LINES`) and splice tokens into the per-buffer cache.
+  Everything else (delimiter edits, oversized regions, near-whole-document
+  windows) falls back to a full parse. Identical text skips parsing entirely.
 
-Face dedup map is rebuilt from scratch on every highlight
-(`src/highlighting.rs:build_kakoune_commands`) even though it depends only on
-the theme. DESIGN.md:94 already plans caching per-theme face maps; reuse them
-across requests and only emit new `set-face` commands when faces change.
+Known limitation: a multiline construct opened more than ~200 lines above an
+edit can mis-color lines in the spliced window until the next full parse
+(which happens on any delimiter-touching edit). True incremental tokenization
+would need giallo to expose parser-state snapshots (`Registry::tokenize` is
+`pub(crate)`; `StateStack` unreachable).
+
+## 4. ~~Cache face maps per (lang, theme) across requests~~ (done)
+
+`FaceAllocator` persists per buffer for a given (lang, theme); styles keep
+their face name across updates and only newly allocated faces are sent.
 
 ## 5. Avoid allocating StyleKey before cache lookup
 
