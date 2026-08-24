@@ -8,12 +8,17 @@ Quick wins already landed on `perf/quick-wins`:
 
 Remaining ideas, roughly ranked by expected impact.
 
-## 1. Persistent connection to the Kakoune session
+## 1. ~~Persistent connection to the Kakoune session~~ (done, with a caveat)
 
-Every highlight spawns a `kak -p <session>` subprocess (`src/highlight.rs`),
-paying fork/exec + session lookup each update (~10-50ms). Replace with writes
-to the session's Unix socket directly (a socket connection is already used for
-liveness checks in `src/server_resources.rs`). Keep `kak -p` as fallback.
+A truly persistent connection is **not possible**: Kakoune's server closes the
+socket immediately after executing each `Command` message by design
+(`MessageType::Command` handler in `src/remote.cc`). What was implemented
+instead: `send_to_kak` writes the framed wire protocol directly to the session
+unix socket (`src/kakoune.rs:send_command_to_session`, same framing as
+`kak -p`: `[type=2 u8][frame size u32][cmd len u32][cmd bytes]`), avoiding the
+fork/exec of the kak binary per update. Falls back to spawning `kak -p` when
+no reachable socket is found. Verified end-to-end against a live headless
+Kakoune 2025.06.03 session.
 
 ## 2. Lazy / partial grammar loading
 
