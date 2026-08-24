@@ -2,10 +2,36 @@
 //! windowed parse planning, line slicing, and delta command building.
 
 use giallo_kak::highlight::{
-    build_delta_commands, chunk_option_name, line_slice, parse_plan, Plan, CHUNK_LINES,
-    MARGIN_LINES,
+    build_delta_commands, chunk_option_name, escalate_to_full, line_slice, parse_plan, Plan,
+    CHUNK_LINES, FULL_REFRESH_INTERVAL, MARGIN_LINES,
 };
 use giallo_kak::highlighting::{FaceDef, RangeToken};
+
+fn window_plan() -> Plan {
+    Plan::Window(giallo_kak::highlight::SplicePlan {
+        window_start: 0,
+        window_end: 10,
+        dirty_start: 5,
+        dirty_end_new: 5,
+        dirty_end_old: 5,
+    })
+}
+
+#[test]
+fn escalation_forces_full_refresh_periodically() {
+    // Below the interval: stays windowed.
+    for n in 0..FULL_REFRESH_INTERVAL - 1 {
+        assert!(matches!(escalate_to_full(window_plan(), n), Plan::Window(_)));
+    }
+    // At the interval: escalated to full.
+    assert!(matches!(
+        escalate_to_full(window_plan(), FULL_REFRESH_INTERVAL - 1),
+        Plan::Full
+    ));
+    // Full/NoChange plans pass through untouched.
+    assert!(matches!(escalate_to_full(Plan::Full, 0), Plan::Full));
+    assert!(matches!(escalate_to_full(Plan::NoChange, 999), Plan::NoChange));
+}
 
 fn tokens(spans: &[(usize, usize, &str)]) -> Vec<RangeToken> {
     spans

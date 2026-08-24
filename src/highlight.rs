@@ -28,6 +28,8 @@ pub struct HighlightCache {
     /// Chunks whose ranges-highlighter has been registered in Kakoune.
     /// Survives lang/theme resets since highlighters stay valid.
     pub ensured_chunks: HashSet<usize>,
+    /// Windowed updates since the last full parse.
+    pub updates_since_full: usize,
 }
 
 impl Default for HighlightCache {
@@ -40,6 +42,7 @@ impl Default for HighlightCache {
             line_tokens: Vec::new(),
             known_faces: HashSet::new(),
             ensured_chunks: HashSet::new(),
+            updates_since_full: 0,
         }
     }
 }
@@ -223,6 +226,18 @@ pub const WARMUP_LINES: usize = 200;
 pub const MARGIN_LINES: usize = 50;
 /// Never window-splice edits larger than this many lines.
 const MAX_DIRTY_LINES: usize = 1000;
+/// Force a full re-parse after this many windowed updates, so any grammar
+/// state divergence accumulated across splices self-heals eventually.
+pub const FULL_REFRESH_INTERVAL: usize = 50;
+
+/// Whether a windowed plan should be escalated to a full re-parse because
+/// `updates_since_full` windowed updates have accumulated.
+pub fn escalate_to_full(plan: Plan, updates_since_full: usize) -> Plan {
+    match plan {
+        Plan::Window(_) if updates_since_full + 1 >= FULL_REFRESH_INTERVAL => Plan::Full,
+        other => other,
+    }
+}
 
 fn count_lines(s: &str) -> usize {
     s.bytes().filter(|&b| b == b'\n').count()
@@ -375,7 +390,7 @@ pub fn highlight_and_send(
                 && !c.text.is_empty()
                 && !c.line_tokens.is_empty()
             {
-                parse_plan(&c.text.clone(), text)
+                escalate_to_full(parse_plan(&c.text.clone(), text), c.updates_since_full)
             } else {
                 Plan::Full
             }
@@ -449,11 +464,13 @@ pub fn highlight_and_send(
                 cache.line_tokens.truncate(splice.dirty_start);
                 cache.line_tokens.extend(replacement);
                 cache.line_tokens.append(&mut tail);
+                cache.updates_since_full += 1;
             }
             _ => {
                 let new_lines =
                     build_line_tokens(&highlighted, &mut cache.allocator, &mut new_faces);
                 cache.line_tokens = new_lines;
+                cache.updates_since_full = 0;
             }
         }
 
