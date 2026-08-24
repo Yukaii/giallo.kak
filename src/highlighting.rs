@@ -1,5 +1,7 @@
 use giallo::ThemeVariant;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::fmt::Write;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StyleKey {
@@ -94,7 +96,8 @@ pub fn build_kakoune_commands(highlighted: &giallo::HighlightedCode<'_>) -> (Vec
     let mut face_map: HashMap<StyleKey, String> = HashMap::new();
     let mut face_counter = 0usize;
 
-    let mut ranges: Vec<String> = Vec::new();
+    let token_count: usize = highlighted.tokens.iter().map(|l| l.len()).sum();
+    let mut ranges = String::with_capacity(token_count * 32);
 
     for (line_idx, line_tokens) in highlighted.tokens.iter().enumerate() {
         let mut col = 0usize;
@@ -112,22 +115,22 @@ pub fn build_kakoune_commands(highlighted: &giallo::HighlightedCode<'_>) -> (Vec
                 continue;
             };
 
-            let face_name = if style == default_style {
-                "default".to_string()
+            let face_name: &str = if style == default_style {
+                "default"
             } else {
                 let key = style_key(&style);
-                if let Some(name) = face_map.get(&key) {
-                    name.clone()
-                } else {
-                    face_counter += 1;
-                    let name = format!("giallo_{face_counter:04}");
-                    let spec = style_to_face_spec(&style, Some(&default_bg));
-                    faces.push(FaceDef {
-                        name: name.clone(),
-                        spec,
-                    });
-                    face_map.insert(key, name.clone());
-                    name
+                match face_map.entry(key) {
+                    Entry::Occupied(e) => e.into_mut(),
+                    Entry::Vacant(e) => {
+                        face_counter += 1;
+                        let name = format!("giallo_{face_counter:04}");
+                        let spec = style_to_face_spec(&style, Some(&default_bg));
+                        faces.push(FaceDef {
+                            name: name.clone(),
+                            spec,
+                        });
+                        e.insert(name)
+                    }
                 }
             };
 
@@ -135,17 +138,14 @@ pub fn build_kakoune_commands(highlighted: &giallo::HighlightedCode<'_>) -> (Vec
             let col_start = start + 1;
             let col_end = end_excl.max(1);
 
-            ranges.push(format!("{line}.{col_start},{line}.{col_end}|{face_name}"));
+            if !ranges.is_empty() {
+                ranges.push(' ');
+            }
+            let _ = write!(ranges, "{line}.{col_start},{line}.{col_end}|{face_name}");
         }
     }
 
-    let ranges_str = if ranges.is_empty() {
-        String::new()
-    } else {
-        ranges.join(" ")
-    };
-
-    (faces, ranges_str)
+    (faces, ranges)
 }
 
 pub fn build_commands(faces: &[FaceDef], ranges: &str) -> String {
