@@ -18,19 +18,7 @@ pub fn is_kakoune_session_alive(session: &str) -> bool {
         return true;
     }
 
-    let mut candidate_paths: Vec<PathBuf> = Vec::new();
-
-    if let Ok(session_dir) = std::env::var("KAKOUNE_SESSION_DIR") {
-        candidate_paths.push(PathBuf::from(session_dir).join(session));
-    }
-    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        candidate_paths.push(PathBuf::from(runtime_dir).join("kakoune").join(session));
-    }
-    if let Ok(user) = std::env::var("USER") {
-        candidate_paths.push(PathBuf::from(format!("/tmp/kakoune-{user}/{session}")));
-        candidate_paths.push(PathBuf::from(format!("/var/tmp/kakoune-{user}/{session}")));
-    }
-    candidate_paths.push(PathBuf::from(format!("/tmp/kakoune/{session}")));
+    let candidate_paths = crate::kakoune::session_socket_paths(session);
 
     let mut any_candidate_found = false;
     for path in &candidate_paths {
