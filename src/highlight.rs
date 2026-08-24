@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use giallo::{HighlightOptions, Registry, ThemeVariant, PLAIN_GRAMMAR_NAME};
 use log;
 
-use crate::config::Config;
+use crate::config::{Config, Tuning};
 use crate::highlighting::{
     build_commands, build_kakoune_commands, build_line_tokens, render_line, FaceAllocator,
     FaceDef, RangeToken,
@@ -91,10 +91,6 @@ impl BufferContext {
     }
 }
 
-/// Lines per range-specs option chunk. Chunk 0 keeps the legacy
-/// `giallo_hl_ranges` option name; chunk N uses `giallo_hl_ranges_N`.
-pub const CHUNK_LINES: usize = 1000;
-
 pub fn chunk_option_name(chunk: usize) -> String {
     if chunk == 0 {
         "giallo_hl_ranges".to_string()
@@ -103,12 +99,16 @@ pub fn chunk_option_name(chunk: usize) -> String {
     }
 }
 
-fn chunk_slice<'a>(lines: &'a [Vec<RangeToken>], chunk: usize) -> &'a [Vec<RangeToken>] {
-    let start = chunk * CHUNK_LINES;
+fn chunk_slice<'a>(
+    lines: &'a [Vec<RangeToken>],
+    chunk: usize,
+    chunk_lines: usize,
+) -> &'a [Vec<RangeToken>] {
+    let start = chunk * chunk_lines;
     if start >= lines.len() {
         &[]
     } else {
-        &lines[start..(start + CHUNK_LINES).min(lines.len())]
+        &lines[start..(start + chunk_lines).min(lines.len())]
     }
 }
 
@@ -129,13 +129,15 @@ pub fn chunk_highlighter_name(chunk: usize) -> String {
 /// commands delivered over the session socket run in a hook-less context,
 /// so highlighter registration must be explicit (never hook-driven).
 pub fn build_delta_commands(
+    tuning: &Tuning,
     old_lines: &[Vec<RangeToken>],
     new_lines: &[Vec<RangeToken>],
     new_faces: &[FaceDef],
     ensured_chunks: &mut HashSet<usize>,
 ) -> Option<String> {
-    let old_chunks = old_lines.len().div_ceil(CHUNK_LINES);
-    let new_chunks = new_lines.len().div_ceil(CHUNK_LINES);
+    let chunk_lines = tuning.chunk_lines;
+    let old_chunks = old_lines.len().div_ceil(chunk_lines);
+    let new_chunks = new_lines.len().div_ceil(chunk_lines);
 
     let mut cmd = String::new();
     for face in new_faces {
@@ -143,8 +145,8 @@ pub fn build_delta_commands(
     }
 
     for chunk in 0..old_chunks.max(new_chunks) {
-        let old_slice = chunk_slice(old_lines, chunk);
-        let new_slice = chunk_slice(new_lines, chunk);
+        let old_slice = chunk_slice(old_lines, chunk, chunk_lines);
+        let new_slice = chunk_slice(new_lines, chunk, chunk_lines);
         if old_slice == new_slice {
             continue;
         }
@@ -168,7 +170,7 @@ pub fn build_delta_commands(
         }
 
         let mut val = String::new();
-        let base = chunk * CHUNK_LINES;
+        let base = chunk * chunk_lines;
         for (i, toks) in new_slice.iter().enumerate() {
             if toks.is_empty() {
                 continue;
@@ -219,22 +221,12 @@ pub struct SplicePlan {
     pub dirty_end_old: usize,
 }
 
-/// Warm-up lines parsed before a dirty region so grammar state has a chance
-/// to converge before the visible/changed lines.
-pub const WARMUP_LINES: usize = 200;
-/// Freshly parsed lines kept after the dirty region.
-pub const MARGIN_LINES: usize = 50;
-/// Never window-splice edits larger than this many lines.
-const MAX_DIRTY_LINES: usize = 1000;
-/// Force a full re-parse after this many windowed updates, so any grammar
-/// state divergence accumulated across splices self-heals eventually.
-pub const FULL_REFRESH_INTERVAL: usize = 50;
-
 /// Whether a windowed plan should be escalated to a full re-parse because
-/// `updates_since_full` windowed updates have accumulated.
-pub fn escalate_to_full(plan: Plan, updates_since_full: usize) -> Plan {
+/// `updates_since_full` windowed updates have accumulated. Periodic full
+/// refreshes let any grammar-state divergence across splices self-heal.
+pub fn escalate_to_full(plan: Plan, updates_since_full: usize, interval: usize) -> Plan {
     match plan {
-        Plan::Window(_) if updates_since_full + 1 >= FULL_REFRESH_INTERVAL => Plan::Full,
+        Plan::Window(_) if updates_since_full + 1 >= interval => Plan::Full,
         other => other,
     }
 }
@@ -271,7 +263,7 @@ fn risky_edit(region: &str) -> bool {
 
 /// Decide how to parse `new_text` given the previously highlighted
 /// `old_text`. Returns Full for first highlights, risky or oversized edits.
-pub fn parse_plan(old_text: &str, new_text: &str) -> Plan {
+pub fn parse_plan(tuning: &Tuning, old_text: &str, new_text: &str) -> Plan {
     if old_text == new_text {
         return Plan::NoChange;
     }
@@ -289,12 +281,12 @@ pub fn parse_plan(old_text: &str, new_text: &str) -> Plan {
     let dirty_end_old = count_lines(&old_text[..bend_old]);
     let changed = dirty_end_new - dirty_start + 1;
 
-    if changed > MAX_DIRTY_LINES || changed * 4 > total_new {
+    if changed > tuning.chunk_lines || changed * 4 > total_new {
         return Plan::Full;
     }
 
-    let window_start = dirty_start.saturating_sub(WARMUP_LINES);
-    let window_end = (dirty_end_new + MARGIN_LINES).min(total_new.saturating_sub(1));
+    let window_start = dirty_start.saturating_sub(tuning.warmup_lines);
+    let window_end = (dirty_end_new + tuning.margin_lines).min(total_new.saturating_sub(1));
     if window_start == 0 && window_end >= total_new - 1 {
         // Window spans the whole document; no point slicing.
         return Plan::Full;
@@ -390,7 +382,11 @@ pub fn highlight_and_send(
                 && !c.text.is_empty()
                 && !c.line_tokens.is_empty()
             {
-                escalate_to_full(parse_plan(&c.text.clone(), text), c.updates_since_full)
+                escalate_to_full(
+                    parse_plan(&config.tuning, &c.text.clone(), text),
+                    c.updates_since_full,
+                    config.tuning.full_refresh_interval,
+                )
             } else {
                 Plan::Full
             }
@@ -458,7 +454,7 @@ pub fn highlight_and_send(
                 let total_old = cache.line_tokens.len();
                 let we_old = (splice
                     .dirty_end_old
-                    .saturating_add(MARGIN_LINES))
+                    .saturating_add(config.tuning.margin_lines))
                 .min(total_old.saturating_sub(1));
                 let mut tail = cache.line_tokens.split_off((we_old + 1).min(total_old));
                 cache.line_tokens.truncate(splice.dirty_start);
@@ -482,7 +478,13 @@ pub fn highlight_and_send(
             ensured_chunks,
             ..
         } = &mut *cache;
-        let commands = build_delta_commands(&old_tokens, line_tokens, &new_faces, ensured_chunks);
+        let commands = build_delta_commands(
+            &config.tuning,
+            &old_tokens,
+            line_tokens,
+            &new_faces,
+            ensured_chunks,
+        );
         cache.text.clear();
         cache.text.push_str(text);
         (commands, cache.line_tokens.len(), new_faces.len())

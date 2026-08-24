@@ -1,11 +1,18 @@
 //! Tests for the incremental highlighting logic: dirty-region detection,
 //! windowed parse planning, line slicing, and delta command building.
 
+use giallo_kak::config::Tuning;
 use giallo_kak::highlight::{
     build_delta_commands, chunk_option_name, escalate_to_full, line_slice, parse_plan, Plan,
-    CHUNK_LINES, FULL_REFRESH_INTERVAL, MARGIN_LINES,
 };
 use giallo_kak::highlighting::{FaceDef, RangeToken};
+
+const TUNING: Tuning = Tuning {
+    warmup_lines: 200,
+    margin_lines: 50,
+    chunk_lines: 1000,
+    full_refresh_interval: 50,
+};
 
 fn window_plan() -> Plan {
     Plan::Window(giallo_kak::highlight::SplicePlan {
@@ -20,17 +27,24 @@ fn window_plan() -> Plan {
 #[test]
 fn escalation_forces_full_refresh_periodically() {
     // Below the interval: stays windowed.
-    for n in 0..FULL_REFRESH_INTERVAL - 1 {
-        assert!(matches!(escalate_to_full(window_plan(), n), Plan::Window(_)));
+    for n in 0..TUNING.full_refresh_interval - 1 {
+        assert!(matches!(escalate_to_full(window_plan(), n, TUNING.full_refresh_interval), Plan::Window(_)));
     }
     // At the interval: escalated to full.
     assert!(matches!(
-        escalate_to_full(window_plan(), FULL_REFRESH_INTERVAL - 1),
+        escalate_to_full(
+            window_plan(),
+            TUNING.full_refresh_interval - 1,
+            TUNING.full_refresh_interval
+        ),
         Plan::Full
     ));
     // Full/NoChange plans pass through untouched.
-    assert!(matches!(escalate_to_full(Plan::Full, 0), Plan::Full));
-    assert!(matches!(escalate_to_full(Plan::NoChange, 999), Plan::NoChange));
+    assert!(matches!(escalate_to_full(Plan::Full, 0, TUNING.full_refresh_interval), Plan::Full));
+    assert!(matches!(
+        escalate_to_full(Plan::NoChange, 999, TUNING.full_refresh_interval),
+        Plan::NoChange
+    ));
 }
 
 fn tokens(spans: &[(usize, usize, &str)]) -> Vec<RangeToken> {
@@ -47,12 +61,12 @@ fn tokens(spans: &[(usize, usize, &str)]) -> Vec<RangeToken> {
 #[test]
 fn plan_no_change_for_identical_text() {
     let text = "fn main() {}\nlet x = 1;\n";
-    assert!(matches!(parse_plan(text, text), Plan::NoChange));
+    assert!(matches!(parse_plan(&TUNING, text, text), Plan::NoChange));
 }
 
 #[test]
 fn plan_full_on_first_highlight() {
-    assert!(matches!(parse_plan("", "let x = 1;\n"), Plan::Full));
+    assert!(matches!(parse_plan(&TUNING, "", "let x = 1;\n"), Plan::Full));
 }
 
 #[test]
@@ -68,13 +82,13 @@ fn plan_window_for_small_midfile_edit() {
             new.push_str(&format!("let v{i} = {i};\n"));
         }
     }
-    match parse_plan(&old, &new) {
+    match parse_plan(&TUNING, &old, &new) {
         Plan::Window(sp) => {
             assert_eq!(sp.dirty_start, 499);
             assert_eq!(sp.dirty_end_new, 499);
             assert_eq!(sp.dirty_end_old, 499);
             assert_eq!(sp.window_start, 499 - 200);
-            assert_eq!(sp.window_end, 499 + MARGIN_LINES);
+            assert_eq!(sp.window_end, 499 + TUNING.margin_lines);
         }
         _ => panic!("expected windowed plan"),
     }
@@ -92,7 +106,7 @@ fn plan_full_when_edit_touches_string_delimiters() {
             new.push_str(&format!("let v{i} = {i};\n"));
         }
     }
-    assert!(matches!(parse_plan(&old, &new), Plan::Full));
+    assert!(matches!(parse_plan(&TUNING, &old, &new), Plan::Full));
 }
 
 #[test]
@@ -106,7 +120,7 @@ fn plan_full_for_comment_marker_edits() {
         s.push_str("let b = /* x */ 2;\n");
         s
     };
-    assert!(matches!(parse_plan(&old2, &new2), Plan::Full));
+    assert!(matches!(parse_plan(&TUNING, &old2, &new2), Plan::Full));
     let _ = (old, new);
 }
 
@@ -123,7 +137,7 @@ fn plan_full_for_oversized_dirty_region() {
             new.push_str(&format!("let v{i} = {i};\n"));
         }
     }
-    assert!(matches!(parse_plan(&old, &new), Plan::Full));
+    assert!(matches!(parse_plan(&TUNING, &old, &new), Plan::Full));
 }
 
 #[test]
@@ -140,7 +154,7 @@ fn plan_handles_line_insertions_and_removals() {
         }
         new.push_str(&format!("let v{i} = {i};\n"));
     }
-    match parse_plan(&old, &new) {
+    match parse_plan(&TUNING, &old, &new) {
         Plan::Window(sp) => {
             assert_eq!(sp.dirty_start, 700);
             // Both inserted lines must be covered (boundary may extend into
@@ -153,7 +167,7 @@ fn plan_handles_line_insertions_and_removals() {
     }
 
     // Removal: delete the same two lines again.
-    match parse_plan(&new, &old) {
+    match parse_plan(&TUNING, &new, &old) {
         Plan::Window(sp) => {
             assert_eq!(sp.dirty_start, 700);
             assert!(sp.dirty_end_old >= 700);
@@ -172,14 +186,14 @@ fn line_slice_extracts_inclusive_range() {
 
 #[test]
 fn delta_commands_send_all_chunks_on_first_update() {
-    let lines: Vec<Vec<RangeToken>> = (0..CHUNK_LINES + 5)
+    let lines: Vec<Vec<RangeToken>> = (0..TUNING.chunk_lines + 5)
         .map(|i| tokens(&[(0, 3, "giallo_0001")]))
         .collect();
     let faces = vec![FaceDef {
         name: "giallo_0001".into(),
         spec: "rgb:ffffff,default".into(),
     }];
-    let cmd = build_delta_commands(&[], &lines, &faces, &mut Default::default())
+    let cmd = build_delta_commands(&TUNING, &[], &lines, &faces, &mut Default::default())
         .expect("first update must send");
 
     assert!(cmd.contains("set-face global giallo_0001"));
@@ -192,13 +206,13 @@ fn delta_commands_send_all_chunks_on_first_update() {
 
 #[test]
 fn delta_commands_skip_unchanged_chunks() {
-    // Two chunks: 1200 lines where only a line in the second chunk changes.
+    // Two chunks (chunk_lines=1000): only a line in the second chunk changes.
     let mk = |face: &str| tokens(&[(0, 3, face)]);
     let old_lines: Vec<Vec<RangeToken>> = (0..1200).map(|_| mk("giallo_0001")).collect();
     let mut new_lines = old_lines.clone();
     new_lines[1150] = mk("giallo_0002");
 
-    let cmd = build_delta_commands(&old_lines, &new_lines, &[], &mut Default::default())
+    let cmd = build_delta_commands(&TUNING, &old_lines, &new_lines, &[], &mut Default::default())
         .expect("changed chunk must send");
 
     // Only the second chunk should be updated (note: exact match incl. the
@@ -212,18 +226,67 @@ fn delta_commands_skip_unchanged_chunks() {
 #[test]
 fn delta_commands_none_when_identical() {
     let lines = vec![tokens(&[(0, 3, "giallo_0001")]); 20];
-    assert!(build_delta_commands(&lines, &lines, &[], &mut Default::default()).is_none());
+    assert!(build_delta_commands(&TUNING, &lines, &lines, &[], &mut Default::default()).is_none());
 }
 
 #[test]
 fn delta_commands_clear_shrunken_chunks() {
     // Two chunks worth of lines shrink to one.
-    let big: Vec<Vec<RangeToken>> = vec![tokens(&[(0, 1, "giallo_0001")]); CHUNK_LINES * 2];
+    let big: Vec<Vec<RangeToken>> = vec![tokens(&[(0, 1, "giallo_0001")]); TUNING.chunk_lines * 2];
     let small: Vec<Vec<RangeToken>> = vec![tokens(&[(0, 1, "giallo_0001")]); 10];
-    let cmd = build_delta_commands(&big, &small, &[], &mut Default::default())
+    let cmd = build_delta_commands(&TUNING, &big, &small, &[], &mut Default::default())
         .expect("shrink must send");
     assert!(cmd.contains(&format!(
         "set-option buffer {} %val{{timestamp}}\n",
         chunk_option_name(1)
     )));
+}
+
+#[test]
+fn tuning_parses_from_toml() {
+    let config: giallo_kak::config::Config =
+        toml::from_str("[tuning]\nwarmup_lines = 5\nmargin_lines = 6\nchunk_lines = 7\nfull_refresh_interval = 8\n")
+            .expect("valid tuning toml");
+    assert_eq!(config.tuning.warmup_lines, 5);
+    assert_eq!(config.tuning.margin_lines, 6);
+    assert_eq!(config.tuning.chunk_lines, 7);
+    assert_eq!(config.tuning.full_refresh_interval, 8);
+
+    // Absent section falls back to defaults.
+    let config: giallo_kak::config::Config = toml::from_str("theme = \"x\"").expect("valid toml");
+    assert_eq!(config.tuning.warmup_lines, 200);
+    assert_eq!(config.tuning.chunk_lines, 1000);
+
+    // Tuning actually drives planning: tiny warmup/margin shrink the window.
+    let mut old = String::new();
+    let mut new = String::new();
+    for i in 0..100 {
+        old.push_str(&format!("let v{i} = {i};\n"));
+        if i == 50 {
+            new.push_str("let v50 = 5050;\n");
+        } else {
+            new.push_str(&format!("let v{i} = {i};\n"));
+        }
+    }
+    match parse_plan(
+        &Tuning { warmup_lines: 3, margin_lines: 2, chunk_lines: 1000, full_refresh_interval: 50 },
+        &old,
+        &new,
+    ) {
+        Plan::Window(sp) => {
+            assert_eq!(sp.window_start, 47);
+            assert_eq!(sp.window_end, 52);
+        }
+        _ => panic!("expected windowed plan"),
+    }
+}
+
+#[test]
+fn tuning_partial_section_uses_defaults() {
+    let config: giallo_kak::config::Config =
+        toml::from_str("[tuning]\nwarmup_lines = 3\n").expect("valid toml");
+    assert_eq!(config.tuning.warmup_lines, 3);
+    assert_eq!(config.tuning.margin_lines, 50);
+    assert_eq!(config.tuning.chunk_lines, 1000);
+    assert_eq!(config.tuning.full_refresh_interval, 50);
 }
