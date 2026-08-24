@@ -1,5 +1,4 @@
 use giallo::ThemeVariant;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -17,6 +16,52 @@ pub struct StyleKey {
 pub struct FaceDef {
     pub name: String,
     pub spec: String,
+}
+
+/// Assigns stable face names to styles across successive highlights of the
+/// same buffer, so unchanged styles keep their name (and number) between
+/// updates. This makes per-line range diffs meaningful.
+pub struct FaceAllocator {
+    map: HashMap<StyleKey, String>,
+    counter: usize,
+}
+
+impl Default for FaceAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FaceAllocator {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            counter: 0,
+        }
+    }
+
+    /// Return the face name for `style`, allocating a new one (pushing its
+    /// definition to `new_faces`) when seen for the first time.
+    pub fn face_for(
+        &mut self,
+        style: &giallo::Style,
+        default_bg: &str,
+        new_faces: &mut Vec<FaceDef>,
+    ) -> String {
+        let key = style_key(style);
+        if let Some(name) = self.map.get(&key) {
+            return name.clone();
+        }
+        self.counter += 1;
+        let name = format!("giallo_{:04}", self.counter);
+        let spec = style_to_face_spec(style, Some(default_bg));
+        new_faces.push(FaceDef {
+            name: name.clone(),
+            spec,
+        });
+        self.map.insert(key, name.clone());
+        name
+    }
 }
 
 pub fn normalize_hex(hex: &str) -> String {
@@ -83,7 +128,14 @@ pub fn style_to_face_spec(style: &giallo::Style, default_bg: Option<&str>) -> St
     }
 }
 
-pub fn build_kakoune_commands(highlighted: &giallo::HighlightedCode<'_>) -> (Vec<FaceDef>, String) {
+/// Build one range string per line (`line.col_start,line.col_end|face ...`),
+/// using `allocator` for stable face naming. Newly allocated face definitions
+/// are appended to `new_faces`.
+pub fn build_line_ranges(
+    highlighted: &giallo::HighlightedCode<'_>,
+    allocator: &mut FaceAllocator,
+    new_faces: &mut Vec<FaceDef>,
+) -> Vec<String> {
     let theme = match highlighted.theme {
         ThemeVariant::Single(theme) => theme,
         ThemeVariant::Dual { light, .. } => light,
@@ -92,15 +144,13 @@ pub fn build_kakoune_commands(highlighted: &giallo::HighlightedCode<'_>) -> (Vec
     let default_style = theme.default_style;
     let default_bg = default_style.background.as_hex();
 
-    let mut faces: Vec<FaceDef> = Vec::new();
-    let mut face_map: HashMap<StyleKey, String> = HashMap::new();
-    let mut face_counter = 0usize;
-
-    let token_count: usize = highlighted.tokens.iter().map(|l| l.len()).sum();
-    let mut ranges = String::with_capacity(token_count * 32);
+    let mut lines: Vec<String> = Vec::with_capacity(highlighted.tokens.len());
 
     for (line_idx, line_tokens) in highlighted.tokens.iter().enumerate() {
+        let line_no = line_idx + 1;
         let mut col = 0usize;
+        let mut line_str = String::new();
+
         for token in line_tokens {
             if token.text.is_empty() {
                 continue;
@@ -118,34 +168,43 @@ pub fn build_kakoune_commands(highlighted: &giallo::HighlightedCode<'_>) -> (Vec
             let face_name: &str = if style == default_style {
                 "default"
             } else {
-                let key = style_key(&style);
-                match face_map.entry(key) {
-                    Entry::Occupied(e) => e.into_mut(),
-                    Entry::Vacant(e) => {
-                        face_counter += 1;
-                        let name = format!("giallo_{face_counter:04}");
-                        let spec = style_to_face_spec(&style, Some(&default_bg));
-                        faces.push(FaceDef {
-                            name: name.clone(),
-                            spec,
-                        });
-                        e.insert(name)
-                    }
-                }
+                &allocator.face_for(&style, &default_bg, new_faces)
             };
 
-            let line = line_idx + 1;
+            if !line_str.is_empty() {
+                line_str.push(' ');
+            }
             let col_start = start + 1;
             let col_end = end_excl.max(1);
-
-            if !ranges.is_empty() {
-                ranges.push(' ');
-            }
-            let _ = write!(ranges, "{line}.{col_start},{line}.{col_end}|{face_name}");
+            let _ = write!(line_str, "{line_no}.{col_start},{line_no}.{col_end}|{face_name}");
         }
+
+        lines.push(line_str);
     }
 
-    (faces, ranges)
+    lines
+}
+
+/// Single-shot helper (oneshot mode): fresh face allocation, all faces
+/// returned, ranges joined into one string. Output is byte-identical to a
+/// first-time incremental build.
+pub fn build_kakoune_commands(highlighted: &giallo::HighlightedCode<'_>) -> (Vec<FaceDef>, String) {
+    let mut allocator = FaceAllocator::new();
+    let mut new_faces = Vec::new();
+    let lines = build_line_ranges(highlighted, &mut allocator, &mut new_faces);
+
+    let mut joined = String::new();
+    for line in &lines {
+        if line.is_empty() {
+            continue;
+        }
+        if !joined.is_empty() {
+            joined.push(' ');
+        }
+        joined.push_str(line);
+    }
+
+    (new_faces, joined)
 }
 
 pub fn build_commands(faces: &[FaceDef], ranges: &str) -> String {

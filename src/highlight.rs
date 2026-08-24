@@ -1,13 +1,74 @@
+use std::collections::HashSet;
 use std::io::Write;
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::Mutex;
 
 use giallo::{HighlightOptions, Registry, ThemeVariant, PLAIN_GRAMMAR_NAME};
 use log;
 
 use crate::config::Config;
-use crate::highlighting::{build_commands, build_kakoune_commands};
+use crate::highlighting::{
+    build_commands, build_line_ranges, build_kakoune_commands, FaceAllocator,
+};
 use crate::kakoune::kak_quote;
+
+/// Per-buffer incremental state, owned by the buffer's processor thread.
+pub struct HighlightCache {
+    pub lang: String,
+    pub theme: String,
+    pub text: String,
+    pub allocator: FaceAllocator,
+    /// Range string for each line of the last successful highlight.
+    pub line_ranges: Vec<String>,
+    /// Every face name ever sent to Kakoune for this buffer.
+    pub known_faces: HashSet<String>,
+}
+
+impl Default for HighlightCache {
+    fn default() -> Self {
+        Self {
+            lang: String::new(),
+            theme: String::new(),
+            text: String::new(),
+            allocator: FaceAllocator::new(),
+            line_ranges: Vec::new(),
+            known_faces: HashSet::new(),
+        }
+    }
+}
+
+impl HighlightCache {
+    /// Reset all state for a new (lang, theme) pair.
+    pub fn reset_for(&mut self, lang: &str, theme: &str) {
+        self.lang = lang.to_string();
+        self.theme = theme.to_string();
+        self.text.clear();
+        self.allocator = FaceAllocator::new();
+        self.line_ranges.clear();
+        self.known_faces.clear();
+    }
+
+    /// Whether cached results can be reused for this (lang, theme).
+    pub fn matches(&self, lang: &str, theme: &str) -> bool {
+        self.lang == lang && self.theme == theme
+    }
+}
+
+/// Join non-empty per-line range strings into one option value.
+pub fn join_line_ranges(lines: &[String]) -> String {
+    let mut joined = String::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        if !joined.is_empty() {
+            joined.push(' ');
+        }
+        joined.push_str(line);
+    }
+    joined
+}
 
 #[derive(Clone, Debug)]
 pub struct BufferContext {
@@ -43,6 +104,7 @@ pub fn highlight_and_send(
     registry: &Registry,
     config: &Config,
     ctx: &BufferContext,
+    cache: Option<&Mutex<HighlightCache>>,
 ) {
     let resolved_lang = config.resolve_lang(lang);
     let resolved_theme = config.resolve_theme(theme);
@@ -57,8 +119,17 @@ pub fn highlight_and_send(
         text.len()
     );
 
-    let options = HighlightOptions::new(&resolved_lang, ThemeVariant::Single(resolved_theme));
-    let highlighted = match registry.highlight(text, &options) {
+    // Reset the cache when language or theme changed; otherwise reuse the
+    // face allocator so face names stay stable across updates.
+    if let Some(cache) = cache {
+        let mut cache = cache.lock().unwrap();
+        if !cache.matches(&resolved_lang, &resolved_theme) {
+            log::debug!("highlight: resetting cache for buffer={} (lang/theme changed)", ctx.buffer);
+            cache.reset_for(&resolved_lang, &resolved_theme);
+        }
+    }
+
+    let options = HighlightOptions::new(&resolved_lang, ThemeVariant::Single(resolved_theme));    let highlighted = match registry.highlight(text, &options) {
         Ok(h) => {
             log::debug!("highlight: success for {} tokens", h.tokens.len());
             h
@@ -91,7 +162,21 @@ pub fn highlight_and_send(
         }
     };
 
-    let (faces, ranges) = build_kakoune_commands(&highlighted);
+    let (faces, ranges) = if let Some(cache) = cache {
+        let mut cache = cache.lock().unwrap();
+        let mut new_faces = Vec::new();
+        let lines = build_line_ranges(&highlighted, &mut cache.allocator, &mut new_faces);
+        let ranges = join_line_ranges(&lines);
+        cache.text.clear();
+        cache.text.push_str(text);
+        cache.line_ranges = lines;
+        for face in &new_faces {
+            cache.known_faces.insert(face.name.clone());
+        }
+        (new_faces, ranges)
+    } else {
+        build_kakoune_commands(&highlighted)
+    };
     log::debug!(
         "highlight: built {} faces and {} ranges",
         faces.len(),

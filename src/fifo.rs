@@ -4,14 +4,14 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use giallo::Registry;
 use log;
 
 use crate::config::Config;
-use crate::highlight::{highlight_and_send, BufferContext};
+use crate::highlight::{highlight_and_send, BufferContext, HighlightCache};
 
 pub fn create_fifo(path: &Path) -> io::Result<()> {
     let c_path = std::ffi::CString::new(path.as_os_str().to_string_lossy().as_bytes())
@@ -81,6 +81,8 @@ pub fn run_buffer_fifo(
     );
 
     let (tx, rx): (Sender<String>, Receiver<String>) = channel();
+
+    let cache = Arc::new(Mutex::new(HighlightCache::default()));
 
     let ctx_clone = ctx.clone();
     let quit_flag_clone = quit_flag.map(|f| f.clone());
@@ -183,7 +185,15 @@ pub fn run_buffer_fifo(
                 );
 
                 if !lang.is_empty() {
-                    highlight_and_send(&content, &lang, &theme, registry, config, &ctx);
+                    highlight_and_send(
+                        &content,
+                        &lang,
+                        &theme,
+                        registry,
+                        config,
+                        &ctx,
+                        Some(&cache),
+                    );
                 } else {
                     log::warn!(
                         "processor: empty language, skipping highlight for buffer={}",
