@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::process::Command;
 use std::process::Stdio;
@@ -9,7 +10,8 @@ use log;
 
 use crate::config::Config;
 use crate::highlighting::{
-    build_commands, build_line_ranges, build_kakoune_commands, FaceAllocator,
+    build_commands, build_kakoune_commands, build_line_tokens, render_line, FaceAllocator,
+    FaceDef, RangeToken,
 };
 use crate::kakoune::kak_quote;
 
@@ -19,10 +21,13 @@ pub struct HighlightCache {
     pub theme: String,
     pub text: String,
     pub allocator: FaceAllocator,
-    /// Range string for each line of the last successful highlight.
-    pub line_ranges: Vec<String>,
+    /// Cached tokens for each line of the last successful highlight.
+    pub line_tokens: Vec<Vec<RangeToken>>,
     /// Every face name ever sent to Kakoune for this buffer.
     pub known_faces: HashSet<String>,
+    /// Chunks whose ranges-highlighter has been registered in Kakoune.
+    /// Survives lang/theme resets since highlighters stay valid.
+    pub ensured_chunks: HashSet<usize>,
 }
 
 impl Default for HighlightCache {
@@ -32,8 +37,9 @@ impl Default for HighlightCache {
             theme: String::new(),
             text: String::new(),
             allocator: FaceAllocator::new(),
-            line_ranges: Vec::new(),
+            line_tokens: Vec::new(),
             known_faces: HashSet::new(),
+            ensured_chunks: HashSet::new(),
         }
     }
 }
@@ -45,7 +51,7 @@ impl HighlightCache {
         self.theme = theme.to_string();
         self.text.clear();
         self.allocator = FaceAllocator::new();
-        self.line_ranges.clear();
+        self.line_tokens.clear();
         self.known_faces.clear();
     }
 
@@ -53,21 +59,6 @@ impl HighlightCache {
     pub fn matches(&self, lang: &str, theme: &str) -> bool {
         self.lang == lang && self.theme == theme
     }
-}
-
-/// Join non-empty per-line range strings into one option value.
-pub fn join_line_ranges(lines: &[String]) -> String {
-    let mut joined = String::new();
-    for line in lines {
-        if line.is_empty() {
-            continue;
-        }
-        if !joined.is_empty() {
-            joined.push(' ');
-        }
-        joined.push_str(line);
-    }
-    joined
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +85,108 @@ impl BufferContext {
             lang: std::sync::Arc::new(std::sync::Mutex::new(lang)),
             theme: std::sync::Arc::new(std::sync::Mutex::new(theme)),
         }
+    }
+}
+
+/// Lines per range-specs option chunk. Chunk 0 keeps the legacy
+/// `giallo_hl_ranges` option name; chunk N uses `giallo_hl_ranges_N`.
+pub const CHUNK_LINES: usize = 1000;
+
+pub fn chunk_option_name(chunk: usize) -> String {
+    if chunk == 0 {
+        "giallo_hl_ranges".to_string()
+    } else {
+        format!("giallo_hl_ranges_{chunk}")
+    }
+}
+
+fn chunk_slice<'a>(lines: &'a [Vec<RangeToken>], chunk: usize) -> &'a [Vec<RangeToken>] {
+    let start = chunk * CHUNK_LINES;
+    if start >= lines.len() {
+        &[]
+    } else {
+        &lines[start..(start + CHUNK_LINES).min(lines.len())]
+    }
+}
+
+/// Name of the ranges-highlighter covering `chunk`.
+pub fn chunk_highlighter_name(chunk: usize) -> String {
+    if chunk == 0 {
+        "buffer/giallo".to_string()
+    } else {
+        format!("buffer/giallo_{chunk}")
+    }
+}
+
+/// Build Kakoune commands that update only the chunks whose contents
+/// changed between `old_lines` and `new_lines`. Returns None when nothing
+/// changed, meaning nothing needs to be sent at all.
+///
+/// Commands are emitted with `-no-hooks`-compatible plain syntax; note that
+/// commands delivered over the session socket run in a hook-less context,
+/// so highlighter registration must be explicit (never hook-driven).
+pub fn build_delta_commands(
+    old_lines: &[Vec<RangeToken>],
+    new_lines: &[Vec<RangeToken>],
+    new_faces: &[FaceDef],
+    ensured_chunks: &mut HashSet<usize>,
+) -> Option<String> {
+    let old_chunks = old_lines.len().div_ceil(CHUNK_LINES);
+    let new_chunks = new_lines.len().div_ceil(CHUNK_LINES);
+
+    let mut cmd = String::new();
+    for face in new_faces {
+        let _ = write!(cmd, "set-face global {} %{{{}}}\n", face.name, face.spec);
+    }
+
+    for chunk in 0..old_chunks.max(new_chunks) {
+        let old_slice = chunk_slice(old_lines, chunk);
+        let new_slice = chunk_slice(new_lines, chunk);
+        if old_slice == new_slice {
+            continue;
+        }
+
+        let name = chunk_option_name(chunk);
+        if chunk >= new_chunks {
+            // Chunk beyond the (shrunken) content: clear it.
+            let _ = write!(cmd, "set-option buffer {name} %val{{timestamp}}\n");
+            continue;
+        }
+
+        // Register the ranges-highlighter for this chunk once. Idempotent:
+        // remove+add replaces any existing registration.
+        if !ensured_chunks.contains(&chunk) {
+            let hl = chunk_highlighter_name(chunk);
+            let _ = write!(
+                cmd,
+                "try %{{ remove-highlighter {hl} }}; add-highlighter -override {hl} ranges {name}\n"
+            );
+            ensured_chunks.insert(chunk);
+        }
+
+        let mut val = String::new();
+        let base = chunk * CHUNK_LINES;
+        for (i, toks) in new_slice.iter().enumerate() {
+            if toks.is_empty() {
+                continue;
+            }
+            if !val.is_empty() {
+                val.push(' ');
+            }
+            render_line(base + i + 1, toks, &mut val);
+        }
+
+        if val.is_empty() {
+            let _ = write!(cmd, "set-option buffer {name} %val{{timestamp}}\n");
+        } else {
+            let _ = write!(cmd, "set-option buffer {name} %val{{timestamp}} {val}\n");
+        }
+    }
+
+    if cmd.is_empty() {
+        None
+    } else {
+        Some(cmd)
     }
 }
 
@@ -162,39 +255,46 @@ pub fn highlight_and_send(
         }
     };
 
-    let (faces, ranges) = if let Some(cache) = cache {
+    let (commands, line_count, face_count) = if let Some(cache) = cache {
         let mut cache = cache.lock().unwrap();
         let mut new_faces = Vec::new();
-        let lines = build_line_ranges(&highlighted, &mut cache.allocator, &mut new_faces);
-        let ranges = join_line_ranges(&lines);
-        cache.text.clear();
-        cache.text.push_str(text);
-        cache.line_ranges = lines;
+        let new_lines = build_line_tokens(&highlighted, &mut cache.allocator, &mut new_faces);
         for face in &new_faces {
             cache.known_faces.insert(face.name.clone());
         }
-        (new_faces, ranges)
+        let HighlightCache {
+            line_tokens,
+            ensured_chunks,
+            ..
+        } = &mut *cache;
+        let commands = build_delta_commands(line_tokens, &new_lines, &new_faces, ensured_chunks);
+        cache.text.clear();
+        cache.text.push_str(text);
+        cache.line_tokens = new_lines;
+        (commands, cache.line_tokens.len(), new_faces.len())
     } else {
-        build_kakoune_commands(&highlighted)
+        let (faces, ranges) = build_kakoune_commands(&highlighted);
+        (Some(build_commands(&faces, &ranges)), 0, faces.len())
     };
+
     log::debug!(
-        "highlight: built {} faces and {} ranges",
-        faces.len(),
-        if ranges.is_empty() {
-            0
-        } else {
-            ranges.split_whitespace().count()
-        }
+        "highlight: built {} faces across {} lines; {}",
+        face_count,
+        line_count,
+        if commands.is_some() { "sending delta" } else { "no changes to send" }
     );
 
-    let commands = build_commands(&faces, &ranges);
-    log::trace!("highlight: sending commands:\n{}", commands);
-
-    if let Err(err) = send_to_kak(&ctx.session, &ctx.buffer, &commands) {
-        log::error!("highlight: failed to send to kak: {}", err);
-        eprintln!("failed to send highlights to kak: {err}");
-    } else {
-        log::debug!("highlight: sent highlights to kak successfully");
+    match commands {
+        Some(commands) => {
+            log::trace!("highlight: sending commands:\n{}", commands);
+            if let Err(err) = send_to_kak(&ctx.session, &ctx.buffer, &commands) {
+                log::error!("highlight: failed to send to kak: {}", err);
+                eprintln!("failed to send highlights to kak: {err}");
+            } else {
+                log::debug!("highlight: sent highlights to kak successfully");
+            }
+        }
+        None => log::debug!("highlight: nothing changed, skipping send"),
     }
 }
 

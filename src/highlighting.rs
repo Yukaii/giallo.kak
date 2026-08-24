@@ -128,14 +128,22 @@ pub fn style_to_face_spec(style: &giallo::Style, default_bg: Option<&str>) -> St
     }
 }
 
-/// Build one range string per line (`line.col_start,line.col_end|face ...`),
-/// using `allocator` for stable face naming. Newly allocated face definitions
-/// are appended to `new_faces`.
-pub fn build_line_ranges(
+/// A single highlighted span within one line, independent of the line's
+/// number so cached tokens stay valid when lines shift up/down.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RangeToken {
+    pub start: usize,
+    pub end: usize,
+    pub face: String,
+}
+
+/// Build per-line [`RangeToken`] lists, using `allocator` for stable face
+/// naming. Newly allocated face definitions are appended to `new_faces`.
+pub fn build_line_tokens(
     highlighted: &giallo::HighlightedCode<'_>,
     allocator: &mut FaceAllocator,
     new_faces: &mut Vec<FaceDef>,
-) -> Vec<String> {
+) -> Vec<Vec<RangeToken>> {
     let theme = match highlighted.theme {
         ThemeVariant::Single(theme) => theme,
         ThemeVariant::Dual { light, .. } => light,
@@ -144,12 +152,11 @@ pub fn build_line_ranges(
     let default_style = theme.default_style;
     let default_bg = default_style.background.as_hex();
 
-    let mut lines: Vec<String> = Vec::with_capacity(highlighted.tokens.len());
+    let mut lines: Vec<Vec<RangeToken>> = Vec::with_capacity(highlighted.tokens.len());
 
-    for (line_idx, line_tokens) in highlighted.tokens.iter().enumerate() {
-        let line_no = line_idx + 1;
+    for line_tokens in highlighted.tokens.iter() {
         let mut col = 0usize;
-        let mut line_str = String::new();
+        let mut out: Vec<RangeToken> = Vec::new();
 
         for token in line_tokens {
             if token.text.is_empty() {
@@ -171,18 +178,43 @@ pub fn build_line_ranges(
                 &allocator.face_for(&style, &default_bg, new_faces)
             };
 
-            if !line_str.is_empty() {
-                line_str.push(' ');
-            }
-            let col_start = start + 1;
-            let col_end = end_excl.max(1);
-            let _ = write!(line_str, "{line_no}.{col_start},{line_no}.{col_end}|{face_name}");
+            out.push(RangeToken {
+                start,
+                end: end_excl,
+                face: face_name.to_string(),
+            });
         }
 
-        lines.push(line_str);
+        lines.push(out);
     }
 
     lines
+}
+
+/// Render one line's tokens into `out` as
+/// `{line}.{col_start},{line}.{col_end}|{face}` entries separated by spaces.
+pub fn render_line(line_no: usize, tokens: &[RangeToken], out: &mut String) {
+    for tok in tokens {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        let col_start = tok.start + 1;
+        let col_end = tok.end.max(1);
+        let _ = write!(out, "{line_no}.{col_start},{line_no}.{col_end}|{}", tok.face);
+    }
+}
+
+/// Build one range string per line from cached tokens.
+pub fn render_all_lines(lines: &[Vec<RangeToken>]) -> Vec<String> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(idx, toks)| {
+            let mut s = String::new();
+            render_line(idx + 1, toks, &mut s);
+            s
+        })
+        .collect()
 }
 
 /// Single-shot helper (oneshot mode): fresh face allocation, all faces
@@ -191,17 +223,17 @@ pub fn build_line_ranges(
 pub fn build_kakoune_commands(highlighted: &giallo::HighlightedCode<'_>) -> (Vec<FaceDef>, String) {
     let mut allocator = FaceAllocator::new();
     let mut new_faces = Vec::new();
-    let lines = build_line_ranges(highlighted, &mut allocator, &mut new_faces);
+    let line_tokens = build_line_tokens(highlighted, &mut allocator, &mut new_faces);
 
     let mut joined = String::new();
-    for line in &lines {
-        if line.is_empty() {
+    for (idx, toks) in line_tokens.iter().enumerate() {
+        if toks.is_empty() {
             continue;
         }
         if !joined.is_empty() {
             joined.push(' ');
         }
-        joined.push_str(line);
+        render_line(idx + 1, toks, &mut joined);
     }
 
     (new_faces, joined)
