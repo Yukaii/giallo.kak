@@ -212,19 +212,19 @@ define-command -docstring "Initialize per-buffer FIFO for giallo" giallo-init-bu
 # Includes rate limiting to reduce process spam during rapid editing.
 define-command -hidden giallo-buffer-update %{
     evaluate-commands -no-hooks %sh{
-        # Rate limiting: skip if last update was too recent
-        current_time_raw=$(date +%s%3N 2>/dev/null || echo "")
-        case "$current_time_raw" in
-            (*[!0-9]*)
-                secs=$(date +%s 2>/dev/null || echo "0")
+        # Rate limiting: skip if last update was too recent.
+        # `kill -0` below is a shell builtin (no fork); this leaves a single
+        # external process (`date`) per update in the common case.
+        current_time=$(date +%s%3N 2>/dev/null)
+        case "$current_time" in
+            ''|*[!0-9]*)
+                # %N unsupported (e.g. macOS/BSD): fall back to second precision.
+                secs=$(date +%s 2>/dev/null)
                 current_time="${secs}000"
                 ;;
-            ("")
-                current_time="0"
-                ;;
-            (*)
-                current_time="$current_time_raw"
-                ;;
+        esac
+        case "$current_time" in
+            ''|*[!0-9]*) current_time="0" ;;
         esac
         last_update="$kak_opt_giallo_last_update_ms"
         rate_limit="$kak_opt_giallo_rate_limit_ms"
@@ -247,16 +247,6 @@ define-command -hidden giallo-buffer-update %{
                 printf 'giallo-init-buffer\n'
                 exit 0
             fi
-            server_comm=$(ps -p "$server_pid" -o comm= 2>/dev/null || true)
-            case "$server_comm" in
-                (*giallo-kak*) ;;
-                (*)
-                    printf 'giallo-stop-server\n'
-                    printf 'giallo-start-server\n'
-                    printf 'giallo-init-buffer\n'
-                    exit 0
-                    ;;
-            esac
         fi
 
         if [ -n "$server_req" ] && [ ! -p "$server_req" ]; then
