@@ -163,6 +163,13 @@ pub fn send_to_kak(session: &str, buffer: &str, payload: &str) -> std::io::Resul
     let status = child.wait()?;
     if !status.success() {
         log::warn!("send_to_kak: kak -p returned exit code {:?}", status.code());
+        if !crate::server_resources::is_kakoune_session_alive(session) {
+            log::info!("send_to_kak: Kakoune session '{session}' is no longer alive");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                format!("session '{session}' is dead"),
+            ));
+        }
     }
     Ok(())
 }

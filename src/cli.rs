@@ -3,7 +3,11 @@ use std::process;
 pub enum Mode {
     Stdio,
     Oneshoot,
-    Fifo { req: String, resp: Option<String> },
+    Fifo {
+        req: String,
+        resp: Option<String>,
+        session: Option<String>,
+    },
     KakouneRc,
     ListGrammars,
     ListGrammarsPlain,
@@ -29,6 +33,7 @@ pub fn print_help() {
     println!("      --oneshot           Run once and exit (for testing)");
     println!("      --fifo <PATH>       Use FIFO at PATH for IPC");
     println!("      --resp <PATH>       Response FIFO path");
+    println!("  -s, --session <NAME>    Kakoune session name for lifecycle tracking");
     println!();
     println!("COMMANDS:");
     println!("  init                    Print Kakoune integration script");
@@ -51,6 +56,7 @@ pub fn parse_args() -> (Mode, bool, bool) {
     let mut oneshot = false;
     let mut fifo_req: Option<String> = None;
     let mut fifo_resp: Option<String> = None;
+    let mut session: Option<String> = None;
     let mut kakoune_rc = false;
     let mut verbose = false;
     let mut list_grammars = false;
@@ -85,6 +91,11 @@ pub fn parse_args() -> (Mode, bool, bool) {
                     fifo_resp = Some(path);
                 }
             }
+            "-s" | "--session" | "--kak-session" => {
+                if let Some(name) = args.next() {
+                    session = Some(name);
+                }
+            }
             _ => {}
         }
     }
@@ -105,6 +116,7 @@ pub fn parse_args() -> (Mode, bool, bool) {
         Mode::Fifo {
             req,
             resp: fifo_resp,
+            session,
         }
     } else if kakoune_rc {
         Mode::KakouneRc

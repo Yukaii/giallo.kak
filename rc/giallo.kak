@@ -31,8 +31,20 @@ declare-option -hidden bool giallo_debug false
 
 define-command -docstring "Start giallo server with FIFO IPC" giallo-start-server %{
     evaluate-commands %sh{
-        if [ -n "$kak_opt_giallo_server_req" ] && [ -p "$kak_opt_giallo_server_req" ]; then
+        if [ -n "$kak_opt_giallo_server_req" ] && [ -p "$kak_opt_giallo_server_req" ] && [ -n "$kak_opt_giallo_server_pid" ] && kill -0 "$kak_opt_giallo_server_pid" >/dev/null 2>&1; then
             exit 0
+        fi
+
+        # Clean up any stale server/FIFO
+        if [ -n "$kak_opt_giallo_server_pid" ]; then
+            kill "$kak_opt_giallo_server_pid" >/dev/null 2>&1 || true
+        fi
+        if [ -n "$kak_opt_giallo_server_req" ]; then
+            req_dir="$(dirname "$kak_opt_giallo_server_req")"
+            rm -f "$kak_opt_giallo_server_req"
+            if [ -d "$req_dir" ]; then
+                rm -rf "$req_dir" >/dev/null 2>&1 || true
+            fi
         fi
 
         tmpdir="${TMPDIR:-/tmp}"
@@ -50,7 +62,17 @@ define-command -docstring "Start giallo server with FIFO IPC" giallo-start-serve
         fi
 
         giallo_bin=$(command -v giallo-kak || true)
-        eval "giallo-kak --fifo \"$req\" $verbose_flag $redirect &"
+        if [ -z "$giallo_bin" ]; then
+            if [ "$kak_opt_giallo_debug" = "true" ]; then
+                printf 'echo -debug "giallo: giallo-kak executable not found in PATH"\n'
+            fi
+            exit 1
+        fi
+        session_flag=""
+        if [ -n "$kak_session" ]; then
+            session_flag="--session $kak_session"
+        fi
+        eval "giallo-kak --fifo \"$req\" $session_flag $verbose_flag $redirect &"
         pid=$!
 
         printf 'set-option global giallo_server_req %s\n' "$req"
@@ -75,7 +97,11 @@ define-command -docstring "Stop giallo server" giallo-stop-server %{
             kill "$kak_opt_giallo_server_pid" >/dev/null 2>&1 || true
         fi
         if [ -n "$kak_opt_giallo_server_req" ]; then
+            req_dir="$(dirname "$kak_opt_giallo_server_req")"
             rm -f "$kak_opt_giallo_server_req"
+            if [ -d "$req_dir" ]; then
+                rm -rf "$req_dir" >/dev/null 2>&1 || true
+            fi
         fi
         printf 'set-option global giallo_server_req ""\n'
         printf 'set-option global giallo_server_pid ""\n'
@@ -152,8 +178,10 @@ define-command -docstring "Disable giallo highlighting for the current buffer" g
 define-command -docstring "Initialize per-buffer FIFO for giallo" giallo-init-buffer %{
     evaluate-commands -no-hooks %sh{
         fifo="$kak_opt_giallo_server_req"
-        if [ -z "$fifo" ] || [ ! -p "$fifo" ]; then
+        server_pid="$kak_opt_giallo_server_pid"
+        if [ -z "$fifo" ] || [ ! -p "$fifo" ] || [ -z "$server_pid" ] || ! kill -0 "$server_pid" >/dev/null 2>&1; then
             printf 'giallo-start-server\n'
+            printf 'giallo-init-buffer\n'
             exit 0
         fi
 
@@ -166,7 +194,12 @@ define-command -docstring "Initialize per-buffer FIFO for giallo" giallo-init-bu
 
         # Write to FIFO in background to avoid blocking UI if server isn't ready yet.
         # INIT format: INIT <session> <buffer> <token> <lang> <theme>
-        sh -c "printf 'INIT %s %s %s %s %s\n' '$session' '$buffer' '$token' '$lang' '$theme' > '$fifo'" >/dev/null 2>&1 &
+        timeout_cmd=$(command -v timeout || command -v gtimeout || true)
+        if [ -n "$timeout_cmd" ]; then
+            eval "$timeout_cmd 2 sh -c \"printf 'INIT %s %s %s %s %s\\n' '$session' '$buffer' '$token' '$lang' '$theme' > '$fifo'\" >/dev/null 2>&1 &"
+        else
+            sh -c "printf 'INIT %s %s %s %s %s\n' '$session' '$buffer' '$token' '$lang' '$theme' > '$fifo'" >/dev/null 2>&1 &
+        fi
         printf 'hook -once buffer BufSetOption giallo_buf_fifo_path=.* %%{ giallo-buffer-update }\n'
         if [ "$kak_opt_giallo_debug" = "true" ] && [ -n "$log_file" ]; then
             printf 'giallo-init-buffer: session=%s buffer=%s lang=%s theme=%s fifo=%s\n' "$session" "$buffer" "$lang" "$theme" "$fifo" >>"$log_file"
@@ -406,7 +439,12 @@ define-command -params 1 \
     evaluate-commands %sh{
         theme="$1"
         if [ -n "$kak_opt_giallo_server_req" ] && [ -p "$kak_opt_giallo_server_req" ]; then
-            printf 'SET_THEME %s %s\n' "$kak_bufname" "$theme" > "$kak_opt_giallo_server_req"
+            timeout_cmd=$(command -v timeout || command -v gtimeout || true)
+            if [ -n "$timeout_cmd" ]; then
+                eval "$timeout_cmd 2 sh -c \"printf 'SET_THEME %s %s\\n' '$kak_bufname' '$theme' > '$kak_opt_giallo_server_req'\" >/dev/null 2>&1 &"
+            else
+                sh -c "printf 'SET_THEME %s %s\n' '$kak_bufname' '$theme' > '$kak_opt_giallo_server_req'" >/dev/null 2>&1 &
+            fi
         fi
     }
     giallo-rehighlight
@@ -477,3 +515,4 @@ hook -group giallo global BufReload .* %{ giallo-rehighlight }
 hook -group giallo global BufWritePost .* %{ giallo-rehighlight }
 hook -group giallo global InsertChar .* %{ giallo-rehighlight }
 hook -group giallo global BufClose .* %{ giallo-disable }
+hook -group giallo global KakEnd .* %{ giallo-stop-server }
