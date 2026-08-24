@@ -113,6 +113,11 @@ pub fn highlight_and_send(
     }
 }
 
+fn cached_kak_path() -> Option<&'static std::path::PathBuf> {
+    static KAK_PATH: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    KAK_PATH.get_or_init(|| which::which("kak").ok()).as_ref()
+}
+
 pub fn send_to_kak(session: &str, buffer: &str, payload: &str) -> std::io::Result<()> {
     let mut cmd = String::new();
     cmd.push_str("evaluate-commands -no-hooks -buffer '");
@@ -143,10 +148,13 @@ pub fn send_to_kak(session: &str, buffer: &str, payload: &str) -> std::io::Resul
         }
     }
 
-    fn cached_kak_path() -> Option<&'static std::path::PathBuf> {
-        static KAK_PATH: std::sync::OnceLock<Option<std::path::PathBuf>> =
-            std::sync::OnceLock::new();
-        KAK_PATH.get_or_init(|| which::which("kak").ok()).as_ref()
+    match crate::kakoune::send_command_to_session(session, &cmd) {
+        Ok(()) => return Ok(()),
+        Err(err) => {
+            log::debug!(
+                "send_to_kak: direct socket send failed ({err}), falling back to kak -p"
+            );
+        }
     }
 
     if cached_kak_path().is_none() {
