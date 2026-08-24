@@ -190,6 +190,151 @@ pub fn build_delta_commands(
     }
 }
 
+/// How much of the document needs re-parsing for an update.
+pub enum Plan {
+    /// Text unchanged since the cached highlight: nothing to do.
+    NoChange,
+    /// Re-parse the entire text.
+    Full,
+    /// Re-parse a bounded window of the document and splice.
+    Window(SplicePlan),
+}
+
+/// Describes a bounded re-parse: which new-text lines to parse and which
+/// cached token range to replace.
+#[derive(Debug)]
+pub struct SplicePlan {
+    /// First new-text line fed to the parser (warmup before the edit).
+    pub window_start: usize,
+    /// Last new-text line fed to the parser.
+    pub window_end: usize,
+    /// First new-text line whose cached tokens get replaced.
+    pub dirty_start: usize,
+    /// Last changed line in the new text.
+    pub dirty_end_new: usize,
+    /// Last changed line in the old text.
+    pub dirty_end_old: usize,
+}
+
+/// Warm-up lines parsed before a dirty region so grammar state has a chance
+/// to converge before the visible/changed lines.
+pub const WARMUP_LINES: usize = 200;
+/// Freshly parsed lines kept after the dirty region.
+pub const MARGIN_LINES: usize = 50;
+/// Never window-splice edits larger than this many lines.
+const MAX_DIRTY_LINES: usize = 1000;
+
+fn count_lines(s: &str) -> usize {
+    s.bytes().filter(|&b| b == b'\n').count()
+}
+
+/// Byte offsets `(start, end)` into `new` of the first differing region,
+/// or None when the texts are equal.
+fn changed_byte_span(old: &str, new: &str) -> Option<(usize, usize)> {
+    if old == new {
+        return None;
+    }
+    let prefix = old
+        .bytes()
+        .zip(new.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let suffix = old[prefix..]
+        .bytes()
+        .rev()
+        .zip(new[prefix..].bytes().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    Some((prefix, new.len() - suffix))
+}
+
+/// Characters that can open or close multiline constructs (strings,
+/// comments). An edit touching these forces a conservative full re-parse.
+fn risky_edit(region: &str) -> bool {
+    region.contains(['"', '\'', '`', '#']) || region.contains("/*") || region.contains("*/")
+}
+
+/// Decide how to parse `new_text` given the previously highlighted
+/// `old_text`. Returns Full for first highlights, risky or oversized edits.
+pub fn parse_plan(old_text: &str, new_text: &str) -> Plan {
+    if old_text == new_text {
+        return Plan::NoChange;
+    }
+    let Some((bstart, bend_new)) = changed_byte_span(old_text, new_text) else {
+        return Plan::Full;
+    };
+    let bend_old = old_text.len() - (new_text.len() - bend_new);
+    if risky_edit(&old_text[bstart..bend_old]) || risky_edit(&new_text[bstart..bend_new]) {
+        return Plan::Full;
+    }
+
+    let total_new = count_lines(new_text) + 1;
+    let dirty_start = count_lines(&new_text[..bstart]);
+    let dirty_end_new = count_lines(&new_text[..bend_new]);
+    let dirty_end_old = count_lines(&old_text[..bend_old]);
+    let changed = dirty_end_new - dirty_start + 1;
+
+    if changed > MAX_DIRTY_LINES || changed * 4 > total_new {
+        return Plan::Full;
+    }
+
+    let window_start = dirty_start.saturating_sub(WARMUP_LINES);
+    let window_end = (dirty_end_new + MARGIN_LINES).min(total_new.saturating_sub(1));
+    if window_start == 0 && window_end >= total_new - 1 {
+        // Window spans the whole document; no point slicing.
+        return Plan::Full;
+    }
+
+    Plan::Window(SplicePlan {
+        window_start,
+        window_end,
+        dirty_start,
+        dirty_end_new,
+        dirty_end_old,
+    })
+}
+
+/// Extract lines `[start_line, end_line]` (inclusive, 0-indexed) of `text`.
+pub fn line_slice(text: &str, start_line: usize, end_line: usize) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let end = end_line.min(lines.len().saturating_sub(1));
+    let start = start_line.min(end);
+    lines[start..=end].join("\n")
+}
+
+/// Parse `text` with the configured grammar, falling back to the plain
+/// grammar when the primary one fails. Returns None when both fail.
+fn highlight_with_fallback<'a>(
+    text: &'a str,
+    lang: &str,
+    theme: &str,
+    registry: &'a Registry,
+) -> Option<giallo::HighlightedCode<'a>> {
+    let options = HighlightOptions::new(lang, ThemeVariant::Single(theme));
+    match registry.highlight(text, &options) {
+        Ok(h) => {
+            log::debug!("highlight: success for {} tokens", h.tokens.len());
+            Some(h)
+        }
+        Err(err) => {
+            log::warn!("highlight: failed for lang={lang} theme={theme}: {err}");
+            log::warn!("highlight: trying plain grammar fallback");
+            let fallback = HighlightOptions::new(PLAIN_GRAMMAR_NAME, ThemeVariant::Single(theme));
+            match registry.highlight(text, &fallback) {
+                Ok(h) => {
+                    log::debug!("highlight: fallback success for {} tokens", h.tokens.len());
+                    Some(h)
+                }
+                Err(err) => {
+                    log::error!("highlight: fallback also failed: {}", err);
+                    eprintln!("highlight error: {err}");
+                    None
+                }
+            }
+        }
+    }
+}
+
 pub fn highlight_and_send(
     text: &str,
     lang: &str,
@@ -222,34 +367,58 @@ pub fn highlight_and_send(
         }
     }
 
-    let options = HighlightOptions::new(&resolved_lang, ThemeVariant::Single(resolved_theme));    let highlighted = match registry.highlight(text, &options) {
-        Ok(h) => {
-            log::debug!("highlight: success for {} tokens", h.tokens.len());
-            h
+    // Decide how much of the document needs re-parsing.
+    let plan = match cache {
+        Some(cache) => {
+            let c = cache.lock().unwrap();
+            if c.matches(&resolved_lang, &resolved_theme)
+                && !c.text.is_empty()
+                && !c.line_tokens.is_empty()
+            {
+                parse_plan(&c.text.clone(), text)
+            } else {
+                Plan::Full
+            }
         }
-        Err(err) => {
-            log::warn!(
-                "highlight: failed for lang={} theme={}: {}",
-                resolved_lang,
-                resolved_theme,
-                err
+        None => Plan::Full,
+    };
+
+    if matches!(plan, Plan::NoChange) {
+        log::debug!("highlight: text unchanged, skipping parse and send");
+        return;
+    }
+
+    let mut plan = plan;
+    let highlighted = match plan {
+        Plan::NoChange => unreachable!(),
+        Plan::Full => match highlight_with_fallback(text, &resolved_lang, resolved_theme, registry)
+        {
+            Some(h) => h,
+            None => return,
+        },
+        Plan::Window(ref splice) => {
+            log::debug!(
+                "highlight: windowed re-parse lines {}..{} (dirty {}..{})",
+                splice.window_start,
+                splice.window_end,
+                splice.dirty_start,
+                splice.dirty_end_new
             );
-            log::warn!(
-                "highlight: failed with lang={}, trying plain: {}",
-                resolved_lang,
-                err
-            );
-            let fallback =
-                HighlightOptions::new(PLAIN_GRAMMAR_NAME, ThemeVariant::Single(resolved_theme));
-            match registry.highlight(text, &fallback) {
-                Ok(h) => {
-                    log::debug!("highlight: fallback success for {} tokens", h.tokens.len());
-                    h
-                }
+            let slice = line_slice(text, splice.window_start, splice.window_end);
+            let window_options =
+                HighlightOptions::new(&resolved_lang, ThemeVariant::Single(resolved_theme));
+            match registry.highlight(&slice, &window_options) {
+                Ok(h) => h,
                 Err(err) => {
-                    log::error!("highlight: fallback also failed: {}", err);
-                    eprintln!("highlight error: {err}");
-                    return;
+                    log::warn!(
+                        "highlight: windowed parse failed ({}), falling back to full",
+                        err
+                    );
+                    plan = Plan::Full;
+                    match highlight_with_fallback(text, &resolved_lang, resolved_theme, registry) {
+                        Some(h) => h,
+                        None => return,
+                    }
                 }
             }
         }
@@ -258,7 +427,36 @@ pub fn highlight_and_send(
     let (commands, line_count, face_count) = if let Some(cache) = cache {
         let mut cache = cache.lock().unwrap();
         let mut new_faces = Vec::new();
-        let new_lines = build_line_tokens(&highlighted, &mut cache.allocator, &mut new_faces);
+
+        let old_tokens = cache.line_tokens.clone();
+        match &plan {
+            Plan::Window(ref splice) => {
+                // Tokens for the parse window; drop the warm-up lines.
+                let window_tokens =
+                    build_line_tokens(&highlighted, &mut cache.allocator, &mut new_faces);
+                let skip = splice.dirty_start - splice.window_start;
+                let mut replacement: Vec<Vec<RangeToken>> =
+                    window_tokens.into_iter().skip(skip).collect();
+                let avail = count_lines(text) + 1 - splice.dirty_start;
+                replacement.truncate(avail);
+
+                let total_old = cache.line_tokens.len();
+                let we_old = (splice
+                    .dirty_end_old
+                    .saturating_add(MARGIN_LINES))
+                .min(total_old.saturating_sub(1));
+                let mut tail = cache.line_tokens.split_off((we_old + 1).min(total_old));
+                cache.line_tokens.truncate(splice.dirty_start);
+                cache.line_tokens.extend(replacement);
+                cache.line_tokens.append(&mut tail);
+            }
+            _ => {
+                let new_lines =
+                    build_line_tokens(&highlighted, &mut cache.allocator, &mut new_faces);
+                cache.line_tokens = new_lines;
+            }
+        }
+
         for face in &new_faces {
             cache.known_faces.insert(face.name.clone());
         }
@@ -267,10 +465,9 @@ pub fn highlight_and_send(
             ensured_chunks,
             ..
         } = &mut *cache;
-        let commands = build_delta_commands(line_tokens, &new_lines, &new_faces, ensured_chunks);
+        let commands = build_delta_commands(&old_tokens, line_tokens, &new_faces, ensured_chunks);
         cache.text.clear();
         cache.text.push_str(text);
-        cache.line_tokens = new_lines;
         (commands, cache.line_tokens.len(), new_faces.len())
     } else {
         let (faces, ranges) = build_kakoune_commands(&highlighted);
