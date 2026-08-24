@@ -190,11 +190,14 @@ impl KakouneSession {
             .path()
             .join(format!("option_{}_{}", safe_name, option));
 
+        // Read the option through %sh redirection inside an
+        // `evaluate-commands -buffer` scope. `echo -to-file` is a silent
+        // no-op for commands delivered via `kak -p` (there is no client).
         self.send_command(&format!(
-            "evaluate-commands -buffer {} %{{ echo -to-file {} %opt{{{}}} }}",
+            "evaluate-commands -no-hooks -buffer {} %{{ nop %sh{{ printf '%s' \"$kak_opt_{opt}\" > {out} }} }}",
             full_name,
-            output_file.to_str().unwrap(),
-            option
+            out = output_file.to_str().unwrap(),
+            opt = option
         ));
 
         // Give Kakoune time to write
