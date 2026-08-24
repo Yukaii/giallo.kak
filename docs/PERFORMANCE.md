@@ -6,6 +6,7 @@ Landed on `perf/quick-wins`:
 - Cached the `kak` binary PATH lookup (was re-scanned per send)
 - Ranges built into a single pre-sized buffer; face names no longer cloned per token
 - Direct socket send instead of spawning `kak -p` per update (see #1)
+- giallo upgraded to 0.5.2 (bitcode+zstd dumps; registry now ~46ms / ~30MB RSS)
 - Chunked delta sends + bounded-window incremental re-parsing (see #3/#4)
 
 Remaining ideas, roughly ranked by expected impact.
@@ -22,14 +23,20 @@ fork/exec of the kak binary per update. Falls back to spawning `kak -p` when
 no reachable socket is found. Verified end-to-end against a live headless
 Kakoune 2025.06.03 session.
 
-## 2. Lazy / partial grammar loading
+## 2. ~~Lazy / partial grammar loading~~ (won't do - impact obsolete)
 
-The full builtin registry (~70-90MB) is loaded eagerly at startup
-(`src/main.rs:59`) for every mode, including `--oneshot`, `list-grammars`,
-and `list-themes`. If giallo's API allows, load grammars per language on first
-use, and skip registry construction entirely for list modes. Check whether
-giallo 0.4.0 offers lazy loading or mmap-backed dumps; upgrading may help both
-memory and startup time.
+Re-evaluated after the giallo 0.5.2 upgrade (zstd+bitcode dumps, upstream
+perf work). Measured on the current binary:
+
+- registry load: ~46ms
+- steady-state server RSS: ~30MB (peak ~41MB during load)
+
+Partial loading is also effectively impossible without upstream changes:
+the builtin dump is monolithic (`builtin.zst`) with no filter/subset/remove
+APIs, and raw grammar sources are not shipped. Given that the FIFO-server
+architecture loads once and amortizes across all buffers for the session,
+the remaining win (~25MB, 46ms one-off) does not justify the complexity.
+Revisit only if giallo exposes subset loading or a low-RAM target emerges.
 
 ## 3. ~~Incremental / dirty-region highlighting~~ (done)
 
