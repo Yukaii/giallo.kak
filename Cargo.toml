@@ -10,6 +10,11 @@ keywords = ["kakoune", "syntax-highlighting", "textmate", "editor"]
 categories = ["command-line-utilities", "text-processing"]
 rust-version = "1.88"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
 [dependencies]
 ctrlc = "3.5"
 giallo = { version = "0.3.1", features = ["dump"] }
@@ -26,6 +31,6 @@ sysinfo = "0.38"
 tempfile = "3.27"
 rand = "0.10"
 
-[[bin]]
+[[example]]
 name = "generate_perf_fixtures"
 path = "tests/fixtures/generate_perf_fixtures.rs"

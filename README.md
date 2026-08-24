@@ -27,6 +27,32 @@ Rich TextMate syntax highlighting for Kakoune with VSCode-quality colors, live t
 
 ## Installation
 
+### Pre-built binaries
+
+#### Using cargo-binstall (Recommended)
+
+```bash
+cargo binstall giallo-kak
+```
+
+#### From GitHub Releases
+
+Download and extract pre-built binaries from the [Releases](https://github.com/Yukaii/giallo.kak/releases) page:
+
+```bash
+# Linux x86_64
+curl -fsSL https://github.com/Yukaii/giallo.kak/releases/latest/download/giallo-kak-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.local/bin/
+
+# Linux aarch64 (ARM64)
+curl -fsSL https://github.com/Yukaii/giallo.kak/releases/latest/download/giallo-kak-aarch64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.local/bin/
+
+# macOS Apple Silicon
+curl -fsSL https://github.com/Yukaii/giallo.kak/releases/latest/download/giallo-kak-aarch64-apple-darwin.tar.gz | tar -xz -C ~/.local/bin/
+
+# macOS Intel
+curl -fsSL https://github.com/Yukaii/giallo.kak/releases/latest/download/giallo-kak-x86_64-apple-darwin.tar.gz | tar -xz -C ~/.local/bin/
+```
+
 ### From crates.io
 
 Install using cargo (requires Rust toolchain):
@@ -41,23 +67,6 @@ To update to the latest version:
 
 ```bash
 cargo install giallo-kak --force
-```
-
-### From GitHub Releases (Pre-built binaries)
-
-Download pre-built binaries from the [Releases](https://github.com/Yukaii/giallo.kak/releases) page:
-
-```bash
-# Linux x86_64
-curl -L -o giallo-kak https://github.com/Yukaii/giallo.kak/releases/latest/download/giallo-kak-x86_64-unknown-linux-gnu
-cp giallo-kak ~/.local/bin/
-
-# macOS
-curl -L -o giallo-kak https://github.com/Yukaii/giallo.kak/releases/latest/download/giallo-kak-x86_64-apple-darwin
-cp giallo-kak ~/.local/bin/
-
-# Make executable
-chmod +x ~/.local/bin/giallo-kak
 ```
 
 ### Build from Source
@@ -361,7 +370,7 @@ Performance benchmarks track highlighting metrics:
 
 Generate performance test fixtures:
 ```bash
-cargo run --bin generate_perf_fixtures
+cargo run --example generate_perf_fixtures
 ```
 
 ### Stress Tests

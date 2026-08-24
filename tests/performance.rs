@@ -338,10 +338,10 @@ fn perf_highlight_small_file_rust() {
         result.output_size_bytes
     );
 
-    // Conservative threshold: < 500ms for small files (accounts for macOS CI variability)
+    // Conservative threshold: < 800ms for small files (accounts for macOS CI and emulation variability)
     assert!(
-        result.highlight_time_ms < 500.0,
-        "Small file should highlight in <500ms, took {:.2}ms",
+        result.highlight_time_ms < 800.0,
+        "Small file should highlight in <800ms, took {:.2}ms",
         result.highlight_time_ms
     );
 
@@ -422,8 +422,8 @@ fn perf_highlight_small_file_javascript() {
     );
 
     assert!(
-        result.highlight_time_ms < 500.0,
-        "JS small file should highlight in <500ms, took {:.2}ms",
+        result.highlight_time_ms < 800.0,
+        "JS small file should highlight in <800ms, took {:.2}ms",
         result.highlight_time_ms
     );
 }
@@ -439,8 +439,8 @@ fn perf_highlight_medium_file_javascript() {
     );
 
     assert!(
-        result.highlight_time_ms < 1000.0,
-        "JS medium file should highlight in <1000ms, took {:.2}ms",
+        result.highlight_time_ms < 1500.0,
+        "JS medium file should highlight in <1500ms, took {:.2}ms",
         result.highlight_time_ms
     );
 }
@@ -456,8 +456,8 @@ fn perf_highlight_small_file_python() {
     );
 
     assert!(
-        result.highlight_time_ms < 400.0,
-        "Python small file should highlight in <400ms, took {:.2}ms",
+        result.highlight_time_ms < 800.0,
+        "Python small file should highlight in <800ms, took {:.2}ms",
         result.highlight_time_ms
     );
 }
@@ -473,8 +473,8 @@ fn perf_highlight_medium_file_python() {
     );
 
     assert!(
-        result.highlight_time_ms < 500.0,
-        "Python medium file should highlight in <500ms, took {:.2}ms",
+        result.highlight_time_ms < 1000.0,
+        "Python medium file should highlight in <1000ms, took {:.2}ms",
         result.highlight_time_ms
     );
 }
@@ -691,8 +691,8 @@ pub fn closure_example() -> impl Fn(i32) -> i32 {
     );
 
     assert!(
-        result.highlight_time_ms < 400.0,
-        "Complex code should highlight in <400ms, took {:.2}ms",
+        result.highlight_time_ms < 800.0,
+        "Complex code should highlight in <800ms, took {:.2}ms",
         result.highlight_time_ms
     );
 }

@@ -1,7 +1,7 @@
 //! Performance test fixture generator
 //!
 //! This binary generates synthetic test files of various sizes for performance testing.
-//! Run with: cargo run --bin generate_perf_fixtures
+//! Run with: cargo run --example generate_perf_fixtures
 
 use std::fs;
 use std::path::PathBuf;
