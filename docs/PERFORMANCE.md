@@ -59,14 +59,18 @@ would need giallo to expose parser-state snapshots (`Registry::tokenize` is
 `FaceAllocator` persists per buffer for a given (lang, theme); styles keep
 their face name across updates and only newly allocated faces are sent.
 
-## 5. Avoid allocating StyleKey before cache lookup
+## 5. ~~Avoid allocating StyleKey before cache lookup~~ (done)
+
+StyleKey is now a packed u64 (fg RGB24 / bg RGB24 / font-style flags); face-map
+lookups allocate and hash nothing. The two `as_hex()` String allocations per
+lookup remain until giallo exposes non-allocating color access.
 
 `style_key()` allocates two Strings (normalized hex fg/bg) per token even on
 cache hits. Consider hashing a packed representation (e.g. RGB u32s + font
 style bits) or borrowing keys via `HashMap<StyleKey, _>` with a raw-entry-style
 lookup to skip allocation on hits.
 
-## 6. Reduce shell-side process spawns in rc/giallo.kak
+## 6. ~~Reduce shell-side process spawns in rc/giallo.kak~~ (mostly done)
 
 The rate limiter around FIFO writes shells out to `date +%s%3N`, `kill -0`,
 and `ps -p` per edit event (`rc/giallo.kak:216-260`). Kakoune's `%val{...}`
