@@ -2,14 +2,71 @@ use giallo::ThemeVariant;
 use std::collections::HashMap;
 use std::fmt::Write;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct StyleKey {
-    pub fg: String,
-    pub bg: String,
-    pub bold: bool,
-    pub italic: bool,
-    pub underline: bool,
-    pub strike: bool,
+/// Packed style identity for face dedup: foreground RGB24 in bits 28..52,
+/// background RGB24 in bits 4..28, font-style flags in bits 0..4. Copyable
+/// and hashable without touching the heap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StyleKey(u64);
+
+fn hex_to_rgb(hex: &str) -> u32 {
+    fn hex_val(c: u8) -> Option<u32> {
+        match c {
+            b'0'..=b'9' => Some(u32::from(c - b'0')),
+            b'a'..=b'f' => Some(u32::from(c - b'a') + 10),
+            b'A'..=b'F' => Some(u32::from(c - b'A') + 10),
+            _ => None,
+        }
+    }
+
+    let b = hex.as_bytes();
+    let start = usize::from(!b.is_empty() && b[0] == b'#');
+    if let Some(digits) = b.get(start..start + 6) {
+        let mut v = 0u32;
+        let mut ok = true;
+        for &c in digits {
+            match hex_val(c) {
+                Some(d) => v = (v << 4) | d,
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            return v;
+        }
+    }
+
+    // Fallback for malformed input (as_hex never produces this in practice).
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    hex.hash(&mut h);
+    (h.finish() & 0xFF_FFFF) as u32
+}
+
+pub fn style_key(style: &giallo::Style) -> StyleKey {
+    // as_hex always yields well-formed #RRGGBB or #RRGGBBAA; taking the
+    // first six hex digits ignores alpha, matching the old normalize_hex.
+    let fg_hex = style.foreground.as_hex();
+    let bg_hex = style.background.as_hex();
+    let fg = hex_to_rgb(&fg_hex);
+    let bg = hex_to_rgb(&bg_hex);
+
+    let mut flags = 0u64;
+    if style.font_style.contains(giallo::FontStyle::BOLD) {
+        flags |= 1;
+    }
+    if style.font_style.contains(giallo::FontStyle::ITALIC) {
+        flags |= 2;
+    }
+    if style.font_style.contains(giallo::FontStyle::UNDERLINE) {
+        flags |= 4;
+    }
+    if style.font_style.contains(giallo::FontStyle::STRIKETHROUGH) {
+        flags |= 8;
+    }
+
+    StyleKey(((fg as u64) << 28) | ((bg as u64) << 4) | flags)
 }
 
 #[derive(Clone, Debug)]
@@ -69,17 +126,6 @@ pub fn normalize_hex(hex: &str) -> String {
         hex[..7].to_string()
     } else {
         hex.to_string()
-    }
-}
-
-pub fn style_key(style: &giallo::Style) -> StyleKey {
-    StyleKey {
-        fg: normalize_hex(&style.foreground.as_hex()),
-        bg: normalize_hex(&style.background.as_hex()),
-        bold: style.font_style.contains(giallo::FontStyle::BOLD),
-        italic: style.font_style.contains(giallo::FontStyle::ITALIC),
-        underline: style.font_style.contains(giallo::FontStyle::UNDERLINE),
-        strike: style.font_style.contains(giallo::FontStyle::STRIKETHROUGH),
     }
 }
 
