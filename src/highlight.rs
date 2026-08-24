@@ -196,6 +196,7 @@ pub fn build_delta_commands(
 }
 
 /// How much of the document needs re-parsing for an update.
+#[derive(Debug)]
 pub enum Plan {
     /// Text unchanged since the cached highlight: nothing to do.
     NoChange,

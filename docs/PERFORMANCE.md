@@ -89,5 +89,17 @@ last scanned offset. Only matters under bursty multi-buffer load.
 
 `tests/performance.rs` measures wall time including process spawn + registry
 load, so it guards regressions but does not isolate highlight-path costs.
-When pursuing items above, benchmark the highlight path directly (e.g. an
-in-process benchmark against `Registry::highlight` + command building).
+For direct measurement run:
+
+    cargo test --release --test highlight_bench -- --ignored --nocapture
+
+Typical numbers on the reference machine (rust grammar, mid-file edit):
+
+| lines | full ms | windowed ms | identical µs |
+|------:|--------:|------------:|-------------:|
+| 200   | 7.4     | 5.8         | 0.3          |
+| 1000  | 37.0    | 10.2        | 1.3          |
+| 5000  | 182.9   | 13.1        | 7.3          |
+
+Windowed cost is ~flat in file size (bounded by warmup+margin), while full
+parse grows linearly; identical updates cost only the byte-diff plan.
