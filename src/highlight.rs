@@ -143,7 +143,13 @@ pub fn send_to_kak(session: &str, buffer: &str, payload: &str) -> std::io::Resul
         }
     }
 
-    if which::which("kak").is_err() {
+    fn cached_kak_path() -> Option<&'static std::path::PathBuf> {
+        static KAK_PATH: std::sync::OnceLock<Option<std::path::PathBuf>> =
+            std::sync::OnceLock::new();
+        KAK_PATH.get_or_init(|| which::which("kak").ok()).as_ref()
+    }
+
+    if cached_kak_path().is_none() {
         log::error!("send_to_kak: kak command not found in PATH");
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
