@@ -60,10 +60,10 @@ impl KakouneSession {
         new_path.push(path_separator);
         new_path.push(&path_env);
 
-        // Spawn Kakoune in daemon mode with modified PATH
+        // Spawn Kakoune in daemon mode with modified PATH and source giallo.kak
+        let source_cmd = format!("source {}", giallo_rc.to_str().expect("invalid path"));
         let child = Command::new("kak")
-            .args(&["-d", "-s", &session_name])
-            .env("KAKOUNE_CONFIG_DIR", temp_dir.path())
+            .args(&["-d", "-s", &session_name, "-E", &source_cmd])
             .env("PATH", &new_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -115,10 +115,9 @@ impl KakouneSession {
             .spawn()
             .expect("failed to spawn kak -p");
 
-        {
-            let stdin = child.stdin.as_mut().expect("failed to get stdin");
+        if let Some(mut stdin) = child.stdin.take() {
             stdin
-                .write_all(command.as_bytes())
+                .write_all(format!("{}\n", command).as_bytes())
                 .expect("failed to write to kak");
         }
 
@@ -132,7 +131,7 @@ impl KakouneSession {
 
     /// Send a command via echo to kak -p
     pub fn send_commands(&self, commands: &[&str]) {
-        let script = commands.join("\n");
+        let script = format!("{}\n", commands.join("\n"));
         let mut child = Command::new("kak")
             .args(&["-p", &self.session_name])
             .stdin(Stdio::piped())
@@ -141,8 +140,7 @@ impl KakouneSession {
             .spawn()
             .expect("failed to spawn kak -p");
 
-        {
-            let stdin = child.stdin.as_mut().expect("failed to get stdin");
+        if let Some(mut stdin) = child.stdin.take() {
             stdin
                 .write_all(script.as_bytes())
                 .expect("failed to write to kak");
@@ -169,21 +167,35 @@ impl KakouneSession {
         buffer_path
     }
 
+    /// Resolve buffer name to absolute path if needed
+    pub fn buffer_name(&self, buffer: &str) -> String {
+        if buffer.starts_with('/') {
+            buffer.to_string()
+        } else {
+            self.temp_dir
+                .path()
+                .join(buffer)
+                .to_str()
+                .unwrap()
+                .to_string()
+        }
+    }
+
     /// Get an option value from a buffer
     pub fn get_buffer_option(&self, buffer: &str, option: &str) -> String {
+        let full_name = self.buffer_name(buffer);
+        let safe_name = buffer.replace('/', "_");
         let output_file = self
             .temp_dir
             .path()
-            .join(format!("option_{}_{}", buffer, option));
+            .join(format!("option_{}_{}", safe_name, option));
 
-        self.send_commands(&[
-            &format!("buffer {}", buffer),
-            &format!(
-                "echo -to-file {} %opt{{{}}}",
-                output_file.to_str().unwrap(),
-                option
-            ),
-        ]);
+        self.send_command(&format!(
+            "evaluate-commands -buffer {} %{{ echo -to-file {} %opt{{{}}} }}",
+            full_name,
+            output_file.to_str().unwrap(),
+            option
+        ));
 
         // Give Kakoune time to write
         thread::sleep(Duration::from_millis(100));
@@ -219,12 +231,40 @@ impl KakouneSession {
     pub fn edit_buffer(&self, buffer: &str, new_content: &str) {
         let buffer_path = self.temp_dir.path().join(buffer);
         fs::write(&buffer_path, new_content).expect("failed to write new content");
+        let full_name = self.buffer_name(buffer);
 
         self.send_commands(&[
-            &format!("buffer {}", buffer),
+            &format!("buffer {}", full_name),
             "execute-keys -draft '%d'",
             &format!("execute-keys -draft 'i{}<esc>'", new_content),
         ]);
+    }
+
+    /// Enable giallo for a buffer
+    pub fn enable_buffer(&self, buffer: &str) {
+        let full_name = self.buffer_name(buffer);
+        self.send_command(&format!(
+            "evaluate-commands -buffer {} %{{ giallo-enable }}",
+            full_name
+        ));
+    }
+
+    /// Set theme for a buffer
+    pub fn set_theme(&self, buffer: &str, theme: &str) {
+        let full_name = self.buffer_name(buffer);
+        self.send_command(&format!(
+            "evaluate-commands -buffer {} %{{ giallo-set-theme {} }}",
+            full_name, theme
+        ));
+    }
+
+    /// Trigger force update for a buffer
+    pub fn force_update(&self, buffer: &str) {
+        let full_name = self.buffer_name(buffer);
+        self.send_command(&format!(
+            "evaluate-commands -buffer {} %{{ giallo-force-update }}",
+            full_name
+        ));
     }
 
     /// Shutdown the Kakoune session
@@ -297,7 +337,7 @@ fn e2e_enable_highlighting() {
 }"#;
 
     session.create_buffer("test.rs", code);
-    session.send_command("giallo-enable");
+    session.enable_buffer("test.rs");
 
     // Wait for highlighting to appear
     let highlighted = session.wait_for_highlighting("test.rs", 3000);
@@ -316,7 +356,7 @@ fn e2e_buffer_with_different_languages() {
     // Test Rust
     let rust_code = r#"fn main() { println!("Hello"); }"#;
     session.create_buffer("test.rs", rust_code);
-    session.send_command("giallo-enable");
+    session.enable_buffer("test.rs");
     assert!(
         session.wait_for_highlighting("test.rs", 3000),
         "Rust buffer should be highlighted"
@@ -325,7 +365,7 @@ fn e2e_buffer_with_different_languages() {
     // Test JavaScript
     let js_code = r#"console.log("Hello");"#;
     session.create_buffer("test.js", js_code);
-    session.send_command("giallo-enable");
+    session.enable_buffer("test.js");
     assert!(
         session.wait_for_highlighting("test.js", 3000),
         "JavaScript buffer should be highlighted"
@@ -340,14 +380,14 @@ fn e2e_theme_change() {
     let code = r#"fn main() { let x = 42; }"#;
 
     session.create_buffer("test.rs", code);
-    session.send_command("giallo-enable");
+    session.enable_buffer("test.rs");
     assert!(
         session.wait_for_highlighting("test.rs", 3000),
         "Should have initial highlighting"
     );
 
     // Change theme
-    session.send_command("giallo-set-theme tokyo-night");
+    session.set_theme("test.rs", "tokyo-night");
     thread::sleep(Duration::from_millis(500));
 
     // Should still have highlighting after theme change
@@ -365,7 +405,7 @@ fn e2e_rehighlight_after_edit() {
     let initial_code = r#"fn main() { let x = 1; }"#;
 
     session.create_buffer("test.rs", initial_code);
-    session.send_command("giallo-enable");
+    session.enable_buffer("test.rs");
     assert!(
         session.wait_for_highlighting("test.rs", 3000),
         "Should have initial highlighting"
@@ -378,7 +418,7 @@ fn e2e_rehighlight_after_edit() {
     session.edit_buffer("test.rs", new_code);
 
     // Trigger rehighlight
-    session.send_command("giallo-force-update");
+    session.force_update("test.rs");
     thread::sleep(Duration::from_millis(500));
 
     let _new_ranges = session.get_buffer_option("test.rs", "giallo_hl_ranges");
@@ -402,8 +442,8 @@ fn e2e_multiple_buffers() {
     session.create_buffer("buffer2.rs", code2);
 
     // Enable giallo on both
-    session.send_commands(&["buffer buffer1.rs", "giallo-enable"]);
-    session.send_commands(&["buffer buffer2.rs", "giallo-enable"]);
+    session.enable_buffer("buffer1.rs");
+    session.enable_buffer("buffer2.rs");
 
     // Both should get highlighted
     assert!(
@@ -423,7 +463,7 @@ fn e2e_empty_buffer() {
     let session = KakouneSession::new();
 
     session.create_buffer("empty.rs", "");
-    session.send_command("giallo-enable");
+    session.enable_buffer("empty.rs");
 
     // Empty buffer should still work (no crash)
     thread::sleep(Duration::from_millis(500));
@@ -440,7 +480,7 @@ fn e2e_server_reconnect() {
     let code = r#"fn main() { let x = 42; }"#;
 
     session.create_buffer("test.rs", code);
-    session.send_command("giallo-enable");
+    session.enable_buffer("test.rs");
     assert!(
         session.wait_for_highlighting("test.rs", 3000),
         "Should have initial highlighting"
@@ -458,7 +498,7 @@ fn e2e_server_reconnect() {
     thread::sleep(Duration::from_millis(500));
 
     // Re-enable giallo (should restart server)
-    session.send_command("giallo-enable");
+    session.enable_buffer("test.rs");
 
     // Should recover and re-highlight
     thread::sleep(Duration::from_millis(1000));
@@ -466,4 +506,192 @@ fn e2e_server_reconnect() {
         session.has_highlighting("test.rs") || true,
         "Should recover after server restart (may need manual re-init)"
     );
+}
+
+#[test]
+fn e2e_no_orphaned_server_on_clean_kakoune_exit() {
+    skip_if_no_kakoune();
+
+    let session = KakouneSession::new();
+    let code = r#"fn main() { let x = 42; }"#;
+
+    session.create_buffer("test.rs", code);
+    session.enable_buffer("test.rs");
+    assert!(
+        session.wait_for_highlighting("test.rs", 3000),
+        "Should have initial highlighting"
+    );
+
+    let server_pid_str = session.get_buffer_option("test.rs", "giallo_server_pid");
+    assert!(!server_pid_str.is_empty(), "Server PID should be set");
+    let server_pid: u32 = server_pid_str.parse().expect("Valid PID");
+
+    // Verify server is currently running
+    let status = Command::new("kill")
+        .args(&["-0", &server_pid.to_string()])
+        .status()
+        .expect("kill command failed");
+    assert!(status.success(), "Server process should be running");
+
+    // Clean exit of Kakoune
+    session.shutdown();
+
+    // Give server process a moment to stop
+    let mut server_stopped = false;
+    for _ in 0..30 {
+        thread::sleep(Duration::from_millis(100));
+        let status = Command::new("kill")
+            .args(&["-0", &server_pid.to_string()])
+            .status()
+            .expect("kill command failed");
+        if !status.success() {
+            server_stopped = true;
+            break;
+        }
+    }
+
+    assert!(
+        server_stopped,
+        "Server process {} should have terminated after clean Kakoune exit",
+        server_pid
+    );
+}
+
+#[test]
+fn e2e_no_orphaned_server_on_abrupt_kakoune_kill() {
+    skip_if_no_kakoune();
+
+    let mut session = KakouneSession::new();
+    let code = r#"fn main() { let x = 42; }"#;
+
+    session.create_buffer("test.rs", code);
+    session.enable_buffer("test.rs");
+    assert!(
+        session.wait_for_highlighting("test.rs", 3000),
+        "Should have initial highlighting"
+    );
+
+    let server_pid_str = session.get_buffer_option("test.rs", "giallo_server_pid");
+    assert!(!server_pid_str.is_empty(), "Server PID should be set");
+    let server_pid: u32 = server_pid_str.parse().expect("Valid PID");
+
+    // Verify server is currently running
+    let status = Command::new("kill")
+        .args(&["-0", &server_pid.to_string()])
+        .status()
+        .expect("kill command failed");
+    assert!(status.success(), "Server process should be running");
+
+    // Abruptly kill Kakoune with SIGKILL (bypassing all Kakoune hooks)
+    if let Some(kak_pid) = session.kak_pid.take() {
+        let _ = Command::new("kill").args(&["-9", &kak_pid.to_string()]).output();
+    }
+
+    // Wait for giallo-kak session watcher to detect Kakoune death and exit
+    let mut server_stopped = false;
+    for _ in 0..40 {
+        thread::sleep(Duration::from_millis(100));
+        let status = Command::new("kill")
+            .args(&["-0", &server_pid.to_string()])
+            .status()
+            .expect("kill command failed");
+        if !status.success() {
+            server_stopped = true;
+            break;
+        }
+    }
+
+    assert!(
+        server_stopped,
+        "Server process {} should have terminated after Kakoune was killed with SIGKILL",
+        server_pid
+    );
+}
+
+#[test]
+fn e2e_multi_session_isolation() {
+    skip_if_no_kakoune();
+
+    // Spawn two independent Kakoune sessions
+    let session1 = KakouneSession::new();
+    let session2 = KakouneSession::new();
+
+    let code1 = "fn from_session1() -> i32 { 100 }";
+    let code2 = "fn from_session2() -> i32 { 200 }";
+
+    session1.create_buffer("buf1.rs", code1);
+    session1.enable_buffer("buf1.rs");
+
+    session2.create_buffer("buf2.rs", code2);
+    session2.enable_buffer("buf2.rs");
+
+    // Both should highlight
+    assert!(
+        session1.wait_for_highlighting("buf1.rs", 3000),
+        "Session 1 should have highlighting"
+    );
+    assert!(
+        session2.wait_for_highlighting("buf2.rs", 3000),
+        "Session 2 should have highlighting"
+    );
+
+    let server1_pid_str = session1.get_buffer_option("buf1.rs", "giallo_server_pid");
+    let server2_pid_str = session2.get_buffer_option("buf2.rs", "giallo_server_pid");
+
+    assert!(!server1_pid_str.is_empty(), "Session 1 server PID should be set");
+    assert!(!server2_pid_str.is_empty(), "Session 2 server PID should be set");
+    assert_ne!(
+        server1_pid_str, server2_pid_str,
+        "Each session must have its own isolated server process"
+    );
+
+    let pid1: u32 = server1_pid_str.parse().expect("Valid PID 1");
+    let pid2: u32 = server2_pid_str.parse().expect("Valid PID 2");
+
+    // Verify both are running
+    assert!(Command::new("kill").args(&["-0", &pid1.to_string()]).status().unwrap().success());
+    assert!(Command::new("kill").args(&["-0", &pid2.to_string()]).status().unwrap().success());
+
+    // Terminate session 1
+    session1.shutdown();
+
+    // Wait for session 1 server to stop
+    let mut server1_stopped = false;
+    for _ in 0..30 {
+        thread::sleep(Duration::from_millis(100));
+        if !Command::new("kill").args(&["-0", &pid1.to_string()]).status().unwrap().success() {
+            server1_stopped = true;
+            break;
+        }
+    }
+    assert!(server1_stopped, "Session 1 server should terminate when session 1 closes");
+
+    // Verify session 2's server is STILL running
+    assert!(
+        Command::new("kill").args(&["-0", &pid2.to_string()]).status().unwrap().success(),
+        "Session 2 server must still be running after session 1 exits"
+    );
+
+    // Verify session 2 can still edit and highlight
+    let new_code2 = "fn updated_session2() -> i32 { 999 }";
+    session2.edit_buffer("buf2.rs", new_code2);
+    session2.force_update("buf2.rs");
+    thread::sleep(Duration::from_millis(500));
+    assert!(
+        session2.has_highlighting("buf2.rs"),
+        "Session 2 highlighting should still work after session 1 exit"
+    );
+
+    // Shutdown session 2 and verify its server also terminates
+    session2.shutdown();
+
+    let mut server2_stopped = false;
+    for _ in 0..30 {
+        thread::sleep(Duration::from_millis(100));
+        if !Command::new("kill").args(&["-0", &pid2.to_string()]).status().unwrap().success() {
+            server2_stopped = true;
+            break;
+        }
+    }
+    assert!(server2_stopped, "Session 2 server should terminate when session 2 closes");
 }

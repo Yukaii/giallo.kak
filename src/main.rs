@@ -38,16 +38,23 @@ fn main() {
         simple_logger::init_with_level(log::Level::Debug).expect("failed to initialize logging");
     }
 
+    let initial_session = match &mode {
+        Mode::Fifo { session, .. } => session.clone(),
+        _ => None,
+    };
+
     log::info!("starting giallo-kak server");
     log::debug!("base_dir: {}", base_dir.display());
 
-    let resources = ServerResources::new(base_dir.clone());
+    let resources = ServerResources::new(base_dir.clone(), initial_session);
 
     if let Err(e) = resources.setup_signal_handler() {
         log::warn!("failed to setup signal handler: {}", e);
     } else {
         log::debug!("signal handler installed successfully");
     }
+
+    resources.start_session_watcher();
 
     let mut registry = match Registry::builtin() {
         Ok(registry) => registry,
@@ -121,7 +128,7 @@ fn main() {
                 eprintln!("oneshot error: {err}");
             }
         }
-        Mode::Fifo { req, resp } => {
+        Mode::Fifo { req, resp, session: _ } => {
             log::debug!("running in fifo mode");
             log::debug!("req fifo: {req}");
             if let Some(ref r) = resp {

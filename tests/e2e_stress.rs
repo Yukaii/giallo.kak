@@ -54,9 +54,12 @@ impl StressTestSession {
         new_path.push(path_separator);
         new_path.push(&path_env);
 
+        let source_cmd = format!(
+            "source {}\nset-option global giallo_debug true\n",
+            giallo_rc.to_str().expect("invalid path")
+        );
         let child = Command::new("kak")
-            .args(&["-d", "-s", &session_name])
-            .env("KAKOUNE_CONFIG_DIR", temp_dir.path())
+            .args(&["-d", "-s", &session_name, "-E", &source_cmd])
             .env("PATH", &new_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())

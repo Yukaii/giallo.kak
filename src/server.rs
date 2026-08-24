@@ -188,6 +188,8 @@ pub fn run_server<R: BufRead, W: Write>(
                 theme
             );
 
+            resources.set_session(session.clone());
+
             let Some(base_dir) = base_dir else {
                 log::error!("INIT: init not supported in this mode");
                 eprintln!("init not supported in this mode");
@@ -250,6 +252,11 @@ pub fn run_server<R: BufRead, W: Write>(
             if let Err(err) = send_to_kak(&session, &buffer, &commands) {
                 log::error!("INIT: failed to send init to kak: {}", err);
                 eprintln!("failed to send init to kak: {err}");
+                if !crate::server_resources::is_kakoune_session_alive(&session) {
+                    log::info!("INIT: Kakoune session '{session}' is dead, exiting server loop");
+                    resources.quit_flag().store(true, std::sync::atomic::Ordering::Relaxed);
+                    break;
+                }
             } else {
                 log::debug!("INIT: sent buffer options to kak");
             }
