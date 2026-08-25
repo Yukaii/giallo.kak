@@ -13,7 +13,7 @@ Rich TextMate syntax highlighting for Kakoune with VSCode-quality colors, live t
 
 ## Features
 
-**Rich TextMate Highlighting** - Get the same high-quality syntax highlighting colors as VSCode, Sublime Text, and other TextMate-based editors. Supports 55+ built-in themes and 60+ language grammars with accurate tokenization and semantic coloring.
+**Rich TextMate Highlighting** - Get the same high-quality syntax highlighting colors as VSCode, Sublime Text, and other TextMate-based editors. Supports 60+ built-in themes and 100+ language grammars with accurate tokenization and semantic coloring.
 
 **Live Theme Switching** - Change themes instantly without restarting Kakoune. Use `giallo-set-theme <theme-name>` to switch between dark/light themes on the fly, with immediate re-highlighting of all open buffers.
 
@@ -118,7 +118,7 @@ giallo-set-theme dracula              # Another dark theme
 
 ### List Available Themes
 
-Explore all 55+ built-in themes plus any custom themes you've added:
+Explore all 60+ built-in themes plus any custom themes you've added:
 
 ```bash
 giallo-kak list-themes
@@ -126,12 +126,14 @@ giallo-kak list-themes
 
 **Sample output:**
 ```
-Builtin themes (55):
+Builtin themes (64):
+  andromeeda
   catppuccin-frappe
   catppuccin-latte
   catppuccin-macchiato
   catppuccin-mocha
   dracula
+  dracula-soft
   github-dark
   github-light
   kanagawa-wave
@@ -147,7 +149,7 @@ giallo-kak list-themes --plain
 
 ### List Available Grammars
 
-See all 60+ available grammars with their filetype mappings:
+See all 100+ available grammars with their filetype mappings:
 
 ```bash
 giallo-kak list-grammars
@@ -155,12 +157,14 @@ giallo-kak list-grammars
 
 **Sample output:**
 ```
-Builtin grammars (60):
+Builtin grammars (109):
   rust
   python
   javascript
   typescript
   go
+  vue
+  svelte
   terraform
   shellscript
   ...
@@ -226,11 +230,11 @@ chunk_lines = 1000
 full_refresh_interval = 50
 ```
 
-Run `giallo-kak list-themes` to see all 55+ built-in themes and any custom themes you've added.
+Run `giallo-kak list-themes` to see all 60+ built-in themes and any custom themes you've added.
 
 ### Custom Grammars
 
-Add support for any programming language instantly by importing TextMate grammars - no Rust compilation needed! Perfect for niche languages, company-specific syntax, or the latest language updates.
+Add support for any programming language instantly by importing TextMate grammars - no Rust compilation needed! Perfect for niche languages, company-specific syntax, or custom language updates.
 
 **Quick Setup:**
 
@@ -240,31 +244,31 @@ Add support for any programming language instantly by importing TextMate grammar
 mkdir -p ~/.config/giallo.kak/grammars
 ```
 
-2. **Download grammar files** (.json or .plist) from popular sources:
+2. **Download grammar files** (`.json`, `.plist`, or `.tmLanguage`) from popular sources:
    - **VSCode Extensions**: Extract grammars from language extensions
    - **TextMate Grammars**: [shikijs/textmate-grammars-themes](https://github.com/shikijs/textmate-grammars-themes) has 200+ grammars
    - **Language Repositories**: Most language repos maintain TextMate grammars
 
-3. **Configure the grammars path** in your `config.toml` (see example above)
+3. **Configure the grammars path** in `~/.config/giallo.kak/config.toml`:
 
-4. **Restart Kakoune** - grammars are loaded automatically on startup
+```toml
+# Set path to custom grammars directory
+grammars_path = "~/.config/giallo.kak/grammars"
 
-**Example: Adding Terraform support**
-```bash
-# Download Terraform grammar
-curl -o ~/.config/giallo.kak/grammars/terraform.json \
-  https://raw.githubusercontent.com/vscode/textmate-grammars-themes/master/grammars/terraform.json
-
-# Add to config.toml
-echo 'tf = "terraform"' >> ~/.config/giallo.kak/config.toml
-echo 'hcl = "terraform"' >> ~/.config/giallo.kak/config.toml
-
-# Restart Kakoune and enjoy Terraform highlighting!
+# Optional: Map custom Kakoune filetypes to grammar names
+[language_map]
+tf = "terraform"
 ```
 
-**Grammar Aliases:**
+4. **Restart Kakoune** - grammars are loaded automatically on startup.
 
-Grammar files can define aliases in their metadata. For example, a `terraform.json` grammar with `"aliases": ["tf", "hcl"]` will automatically be available for those filetypes. You can also manually map filetypes using `language_map` in config.
+**Automatic Grammar Aliasing:**
+
+`giallo.kak` automatically registers language aliases for custom grammars:
+- **Filename stem**: e.g., `~/.config/giallo.kak/grammars/my-lang.json` automatically registers the alias `my-lang`.
+- **`fileTypes` metadata**: Any file extensions defined in the grammar's `fileTypes` array in the JSON/plist are registered as aliases.
+
+You only need an entry under `[language_map]` in `config.toml` if Kakoune's `filetype` option differs from the grammar name or its aliases.
 
 ### Custom Themes
 
