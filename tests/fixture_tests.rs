@@ -359,3 +359,86 @@ const u = `outer "double" 'single' outer`;"#;
     let count = count_highlights(&output);
     assert!(count > 10, "nested strings should be highlighted");
 }
+
+#[test]
+fn fixture_vue_sample() {
+    let code = r#"<template>
+  <div class="example">
+    <h1>{{ title }}</h1>
+    <button @click="increment">Count: {{ count }}</button>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue';
+
+const title = ref('Vue SFC Example');
+const count = ref(0);
+
+function increment() {
+  count.value++;
+}
+</script>
+
+<style scoped>
+.example {
+  text-align: center;
+  color: #2c3e50;
+}
+</style>
+"#;
+
+    let output = run_oneshot_highlight("vue", "catppuccin-frappe", code);
+    assert_valid_highlighting(&output, "vue_sample");
+
+    let count = count_highlights(&output);
+    assert!(
+        count > 30,
+        "vue_sample should have substantial highlighting across template/script/style, got {} ranges",
+        count
+    );
+}
+
+#[test]
+fn list_themes_includes_all_builtins() {
+    let bin = env!("CARGO_BIN_EXE_giallo-kak");
+    let output = Command::new(bin)
+        .arg("list-themes")
+        .arg("--plain")
+        .output()
+        .expect("failed to execute list-themes");
+
+    assert!(output.status.success(), "list-themes failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let theme_count = stdout.lines().filter(|l| !l.trim().is_empty()).count();
+    assert!(
+        theme_count >= 60,
+        "list-themes should list at least 60 built-in themes, got {}",
+        theme_count
+    );
+    assert!(
+        stdout.lines().any(|l| l.trim() == "kanagawa-wave"),
+        "list-themes should include default theme kanagawa-wave"
+    );
+    assert!(
+        stdout.lines().any(|l| l.trim() == "catppuccin-mocha"),
+        "list-themes should include catppuccin-mocha"
+    );
+}
+
+#[test]
+fn list_grammars_includes_vue() {
+    let bin = env!("CARGO_BIN_EXE_giallo-kak");
+    let output = Command::new(bin)
+        .arg("list-grammars")
+        .arg("--plain")
+        .output()
+        .expect("failed to execute list-grammars");
+
+    assert!(output.status.success(), "list-grammars failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.lines().any(|l| l.trim() == "vue"),
+        "list-grammars output should contain 'vue'"
+    );
+}
