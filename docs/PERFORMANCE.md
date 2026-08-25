@@ -90,7 +90,7 @@ Two threads are spawned per buffer (`src/fifo.rs:89`). Default stacks are 8MB
 virtual each; use `thread::Builder::stack_size(...)` since the work is shallow.
 Minor RSS/virtual-footprint win, mostly cosmetic.
 
-## 8. Reader-thread scan efficiency
+## 8. ~~Reader-thread scan efficiency~~ (done)
 
 The FIFO reader restarts sentinel search from position 0 after each drain
 (`src/fifo.rs:151-154`) - O(n^2)-ish when many messages accumulate. Track the
