@@ -158,10 +158,15 @@ pub fn build_delta_commands(
             continue;
         }
 
-        // Register the ranges-highlighter for this chunk once. Idempotent:
-        // remove+add replaces any existing registration.
+        // Declare the option and register its ranges-highlighter once.
+        // The rc script only declares chunk 0 (`giallo_hl_ranges`); chunks
+        // beyond that would otherwise fail with "option not found". The
+        // declaration is wrapped in try so an already-declared option (rc
+        // side) is not an error. Idempotent: remove+add replaces any
+        // existing registration.
         if !ensured_chunks.contains(&chunk) {
             let hl = chunk_highlighter_name(chunk);
+            let _ = write!(cmd, "try %{{ declare-option -hidden range-specs {name} }}\n");
             let _ = write!(
                 cmd,
                 "try %{{ remove-highlighter {hl} }}; add-highlighter -override {hl} ranges {name}\n"
