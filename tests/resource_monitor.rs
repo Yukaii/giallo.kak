@@ -28,6 +28,9 @@ pub struct ResourceReport {
     pub avg_memory_mb: f64,
     pub max_memory_mb: f64,
     pub memory_growth_percent: f64,
+    /// Absolute memory growth vs baseline, in MB. More meaningful than the
+    /// percentage when the baseline is small.
+    pub memory_delta_mb: f64,
     pub total_samples: usize,
 }
 
@@ -139,6 +142,7 @@ impl ResourceMonitor {
                 avg_memory_mb: 0.0,
                 max_memory_mb: 0.0,
                 memory_growth_percent: 0.0,
+                memory_delta_mb: 0.0,
                 total_samples: 0,
             };
         }
@@ -162,6 +166,7 @@ impl ResourceMonitor {
         } else {
             0.0
         };
+        let memory_delta_mb = max_memory_mb - self.baseline_memory_mb;
 
         ResourceReport {
             samples: self.samples.clone(),
@@ -171,6 +176,7 @@ impl ResourceMonitor {
             avg_memory_mb,
             max_memory_mb,
             memory_growth_percent,
+            memory_delta_mb,
             total_samples: self.samples.len(),
         }
     }
@@ -240,6 +246,7 @@ impl MultiProcessMonitor {
                 avg_memory_mb: 0.0,
                 max_memory_mb: 0.0,
                 memory_growth_percent: 0.0,
+                memory_delta_mb: 0.0,
                 total_samples: 0,
             };
         }
@@ -264,6 +271,7 @@ impl MultiProcessMonitor {
             avg_memory_mb,
             max_memory_mb,
             memory_growth_percent: 0.0, // Can't calculate for combined
+            memory_delta_mb: 0.0,       // Can't calculate for combined
             total_samples,
         }
     }

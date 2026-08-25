@@ -1,0 +1,10 @@
+pub mod cli;
+pub mod commands;
+pub mod config;
+pub mod fifo;
+pub mod highlight;
+pub mod highlighting;
+pub mod kakoune;
+pub mod registry_loader;
+pub mod server;
+pub mod server_resources;

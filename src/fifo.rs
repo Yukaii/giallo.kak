@@ -4,14 +4,14 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use giallo::Registry;
 use log;
 
 use crate::config::Config;
-use crate::highlight::{highlight_and_send, BufferContext};
+use crate::highlight::{highlight_and_send, BufferContext, HighlightCache};
 
 pub fn create_fifo(path: &Path) -> io::Result<()> {
     let c_path = std::ffi::CString::new(path.as_os_str().to_string_lossy().as_bytes())
@@ -67,6 +67,30 @@ pub fn handle_init(token: &str, base_dir: &Path) -> io::Result<(std::path::PathB
     Ok((req, sentinel))
 }
 
+/// Extract all complete sentinel-delimited messages from `buf`, draining the
+/// consumed bytes. `scanned` tracks how far the buffer has already been
+/// searched without a match so appended data never triggers a rescan from
+/// position 0; on an unsuccessful scan it is rewound to keep the last
+/// `sentinel.len()-1` bytes eligible for a boundary-spanning match.
+pub fn drain_messages(buf: &mut String, sentinel: &str, scanned: &mut usize) -> Vec<String> {
+    let mut messages = Vec::new();
+    loop {
+        match buf[(*scanned).min(buf.len())..].find(sentinel) {
+            Some(rel) => {
+                let index = (*scanned).min(buf.len()) + rel;
+                messages.push(buf[..index].to_string());
+                buf.drain(..index + sentinel.len());
+                *scanned = 0;
+            }
+            None => {
+                *scanned = buf.len().saturating_sub(sentinel.len().saturating_sub(1));
+                break;
+            }
+        }
+    }
+    messages
+}
+
 pub fn run_buffer_fifo(
     req_path: &Path,
     registry: &Registry,
@@ -82,6 +106,8 @@ pub fn run_buffer_fifo(
 
     let (tx, rx): (Sender<String>, Receiver<String>) = channel();
 
+    let cache = Arc::new(Mutex::new(HighlightCache::default()));
+
     let ctx_clone = ctx.clone();
     let quit_flag_clone = quit_flag.map(|f| f.clone());
     let req_path_owned = req_path.to_path_buf();
@@ -89,6 +115,10 @@ pub fn run_buffer_fifo(
     let reader_handle = thread::spawn(move || {
         let mut buf = String::new();
         let sentinel = ctx_clone.sentinel.clone();
+        // Bytes up to this offset contain no sentinel start; searching
+        // resumes here instead of from position 0 on every read, keeping
+        // accumulation O(n) rather than O(n^2).
+        let mut scanned = 0usize;
 
         let mut file = match open_fifo_nonblocking(&req_path_owned) {
             Ok(f) => f,
@@ -148,11 +178,7 @@ pub fn run_buffer_fifo(
                 }
             }
 
-            while let Some(index) = buf.find(&sentinel) {
-                let content = buf[..index].to_string();
-                let end_index = index + sentinel.len();
-                buf.drain(..end_index);
-
+            for content in drain_messages(&mut buf, &sentinel, &mut scanned) {
                 if tx.send(content).is_err() {
                     log::debug!("reader: channel closed, exiting");
                     return;
@@ -183,7 +209,15 @@ pub fn run_buffer_fifo(
                 );
 
                 if !lang.is_empty() {
-                    highlight_and_send(&content, &lang, &theme, registry, config, &ctx);
+                    highlight_and_send(
+                        &content,
+                        &lang,
+                        &theme,
+                        registry,
+                        config,
+                        &ctx,
+                        Some(&cache),
+                    );
                 } else {
                     log::warn!(
                         "processor: empty language, skipping highlight for buffer={}",

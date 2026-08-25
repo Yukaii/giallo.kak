@@ -211,6 +211,19 @@ hcl = "terraform"
 # Maps giallo language to Kakoune highlighter name
 [highlighter_map]
 kak = "kakrc"
+
+# Incremental highlighting tuning (defaults shown)
+[tuning]
+# Lines parsed before a dirty region so grammar state can converge.
+# Larger = fewer color artifacts inside long multiline constructs, slower edits.
+warmup_lines = 200
+# Freshly parsed lines kept after a dirty region.
+margin_lines = 50
+# Lines per range-specs option chunk (delta sends operate per chunk).
+chunk_lines = 1000
+# Force a full re-parse after this many windowed updates, so any
+# grammar-state drift from splicing self-heals eventually.
+full_refresh_interval = 50
 ```
 
 Run `giallo-kak list-themes` to see all 55+ built-in themes and any custom themes you've added.

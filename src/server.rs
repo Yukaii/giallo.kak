@@ -1,5 +1,6 @@
 use std::io::{self, BufRead, Write};
 use std::path::Path;
+use std::process;
 use std::sync::Arc;
 
 use giallo::{HighlightOptions, Registry, ThemeVariant, PLAIN_GRAMMAR_NAME};
@@ -207,11 +208,17 @@ pub fn run_server<R: BufRead, W: Write>(
 
             let highlighter = config.resolve_highlighter(&lang);
 
+            // Setting the options alone is not enough: commands delivered over
+            // the session socket run hook-less, so the rc-side BufSetOption
+            // hooks that would trigger the first content update may never
+            // fire. Record our pid as seen and kick the update directly so
+            // the initial highlight is delivered deterministically.
             let commands = format!(
-                "set-option buffer giallo_buf_fifo_path {req}\nset-option buffer giallo_buf_sentinel {sentinel}\nset-option buffer giallo_highlighter {highlighter}\n",
+                "set-option buffer giallo_buf_fifo_path {req}\nset-option buffer giallo_buf_sentinel {sentinel}\nset-option buffer giallo_highlighter {highlighter}\nset-option buffer giallo_server_pid_seen {pid}\ngiallo-buffer-update\n",
                 req = req.display(),
                 sentinel = sentinel,
-                highlighter = highlighter
+                highlighter = highlighter,
+                pid = process::id()
             );
 
             let req_path = req.clone();

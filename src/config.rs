@@ -5,6 +5,48 @@ use std::path::PathBuf;
 
 const DEFAULT_THEME: &str = "catppuccin-frappe";
 
+fn default_warmup_lines() -> usize {
+    200
+}
+fn default_margin_lines() -> usize {
+    50
+}
+fn default_chunk_lines() -> usize {
+    1000
+}
+fn default_full_refresh_interval() -> usize {
+    50
+}
+
+/// Tuning knobs for the incremental highlighter, settable in the `[tuning]`
+/// section of the config file. Any subset may be specified.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct Tuning {
+    /// Lines parsed before a dirty region so grammar state can converge.
+    #[serde(default = "default_warmup_lines")]
+    pub warmup_lines: usize,
+    /// Freshly parsed lines kept after a dirty region.
+    #[serde(default = "default_margin_lines")]
+    pub margin_lines: usize,
+    /// Lines per range-specs option chunk.
+    #[serde(default = "default_chunk_lines")]
+    pub chunk_lines: usize,
+    /// Force a full re-parse after this many windowed updates.
+    #[serde(default = "default_full_refresh_interval")]
+    pub full_refresh_interval: usize,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Self {
+            warmup_lines: 200,
+            margin_lines: 50,
+            chunk_lines: 1000,
+            full_refresh_interval: 50,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Config {
     pub theme: Option<String>,
@@ -16,6 +58,8 @@ pub struct Config {
     pub grammars_path: Option<String>,
     #[serde(default)]
     pub themes_path: Option<String>,
+    #[serde(default)]
+    pub tuning: Tuning,
 }
 
 impl Config {

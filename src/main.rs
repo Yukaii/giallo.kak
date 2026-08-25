@@ -6,23 +6,12 @@ use std::sync::Arc;
 use giallo::Registry;
 use log;
 
-mod cli;
-mod commands;
-mod config;
-mod fifo;
-mod highlight;
-mod highlighting;
-mod kakoune;
-mod registry_loader;
-mod server;
-mod server_resources;
-
-use cli::{parse_args, Mode};
-use commands::{list_grammars, list_themes};
-use config::Config;
-use registry_loader::{load_custom_grammars, load_custom_themes};
-use server::run_server;
-use server_resources::ServerResources;
+use giallo_kak::cli::{parse_args, Mode};
+use giallo_kak::commands::{list_grammars, list_themes};
+use giallo_kak::config::Config;
+use giallo_kak::registry_loader::{load_custom_grammars, load_custom_themes};
+use giallo_kak::server::run_server;
+use giallo_kak::server_resources::ServerResources;
 
 fn main() {
     let (mode, verbose, _plain) = parse_args();
