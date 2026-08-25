@@ -71,12 +71,19 @@ jobs:
           path: artifacts
           pattern: giallo-kak-*
 
-      - id: sha
-        run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - name: Get current version and SHA
+        id: version
+        run: |
+          CURRENT_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          SHA=$(git rev-parse --short HEAD)
+          PRERELEASE_VERSION="${CURRENT_VERSION}-prerelease.${SHA}"
+          echo "current_version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+          echo "prerelease_version=${PRERELEASE_VERSION}" >> $GITHUB_OUTPUT
+          echo "sha=${SHA}" >> $GITHUB_OUTPUT
 
       - uses: dev-drprasad/delete-older-releases@v0.3.2
         with:
-          keep_latest: 0
+          keep_latest: 3
           delete_tag_pattern: prerelease
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -84,10 +91,10 @@ jobs:
 
       - uses: softprops/action-gh-release@v1
         with:
-          tag_name: prerelease
-          name: Prerelease (${{ steps.sha.outputs.sha }})
+          tag_name: v${{ steps.version.outputs.prerelease_version }}
+          name: Prerelease (v${{ steps.version.outputs.prerelease_version }})
           body: |
-            This is a prerelease build from commit ${{ steps.sha.outputs.sha }}.
+            This is a prerelease build from commit ${{ steps.version.outputs.sha }}.
             
             These binaries are automatically built and may contain unstable features.
             For stable releases, see the [releases page](https://github.com/Yukaii/giallo.kak/releases).
