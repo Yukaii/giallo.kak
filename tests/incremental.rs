@@ -187,7 +187,7 @@ fn line_slice_extracts_inclusive_range() {
 #[test]
 fn delta_commands_send_all_chunks_on_first_update() {
     let lines: Vec<Vec<RangeToken>> = (0..TUNING.chunk_lines + 5)
-        .map(|i| tokens(&[(0, 3, "giallo_0001")]))
+        .map(|_| tokens(&[(0, 3, "giallo_0001")]))
         .collect();
     let faces = vec![FaceDef {
         name: "giallo_0001".into(),
